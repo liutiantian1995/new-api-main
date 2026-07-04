@@ -33,6 +33,12 @@ const (
 	SubscriptionResetCustom  = "custom"
 )
 
+// Subscription activation strategy
+const (
+	SubscriptionActivationImmediate = "immediate"
+	SubscriptionActivationOnUse     = "on_use"
+)
+
 var (
 	ErrSubscriptionOrderNotFound      = errors.New("subscription order not found")
 	ErrSubscriptionOrderStatusInvalid = errors.New("subscription order status invalid")
@@ -296,6 +302,34 @@ type SubscriptionSummary struct {
 	Subscription *UserSubscription `json:"subscription"`
 }
 
+// PendingSubscriptionActivation records subscriptions that are waiting to be activated
+// (activation_strategy=on_use). When the user first logs in or uses a token,
+// the corresponding row is activated and the linked UserSubscription transitions
+// from pending to active.
+type PendingSubscriptionActivation struct {
+	Id                  int    `json:"id"`
+	UserId              int    `json:"user_id" gorm:"index"`
+	UserSubscriptionId  int    `json:"user_subscription_id" gorm:"index"`
+	PlanId              int    `json:"plan_id" gorm:"index"`
+	ActivationStrategy  string `json:"activation_strategy" gorm:"type:varchar(16);default:'on_use'"`
+	Status              string `json:"status" gorm:"type:varchar(16);default:'pending'"`
+	ActivatedAt         int64  `json:"activated_at" gorm:"type:bigint;default:0"`
+	CreatedAt           int64  `json:"created_at" gorm:"type:bigint"`
+	UpdatedAt           int64  `json:"updated_at" gorm:"type:bigint"`
+}
+
+func (p *PendingSubscriptionActivation) BeforeCreate(tx *gorm.DB) error {
+	now := common.GetTimestamp()
+	p.CreatedAt = now
+	p.UpdatedAt = now
+	return nil
+}
+
+func (p *PendingSubscriptionActivation) BeforeUpdate(tx *gorm.DB) error {
+	p.UpdatedAt = common.GetTimestamp()
+	return nil
+}
+
 func calcPlanEndTime(start time.Time, plan *SubscriptionPlan) (int64, error) {
 	if plan == nil {
 		return 0, errors.New("plan is nil")
@@ -472,15 +506,32 @@ func downgradeUserGroupForSubscriptionTx(tx *gorm.DB, sub *UserSubscription, now
 }
 
 func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *SubscriptionPlan, source string) (*UserSubscription, error) {
+	return CreateUserSubscriptionFromPlanTxWithStrategy(tx, userId, plan, source, "")
+}
+
+// CreateUserSubscriptionFromPlanTxWithStrategy creates a UserSubscription with an optional
+// activation strategy. When strategy is "on_use", the subscription is created in pending
+// state (start_time=0, end_time=0) and a PendingSubscriptionActivation row is inserted.
+// When strategy is "" or "immediate", the existing immediate-activation behavior is preserved.
+func CreateUserSubscriptionFromPlanTxWithStrategy(tx *gorm.DB, userId int, plan *SubscriptionPlan, source string, strategy string) (*UserSubscription, error) {
 	if tx == nil {
 		return nil, errors.New("tx is nil")
-	}
-	if plan == nil || plan.Id == 0 {
-		return nil, errors.New("invalid plan")
 	}
 	if userId <= 0 {
 		return nil, errors.New("invalid user id")
 	}
+
+	var subPlan *SubscriptionPlan
+	if plan != nil && plan.Id > 0 {
+		fetchedPlan, err := getSubscriptionPlanByIdTx(tx, plan.Id)
+		if err != nil {
+			return nil, err
+		}
+		subPlan = fetchedPlan
+	} else {
+		return nil, errors.New("invalid plan")
+	}
+	plan = subPlan
 	if plan.MaxPurchasePerUser > 0 {
 		var count int64
 		if err := tx.Model(&UserSubscription{}).
@@ -523,14 +574,26 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 	if plan.AllowWalletOverflow != nil {
 		allowWalletOverflow = *plan.AllowWalletOverflow
 	}
+
+	isPending := strategy == SubscriptionActivationOnUse
+	subStatus := "active"
+	startTime := now.Unix()
+	if isPending {
+		subStatus = "pending"
+		startTime = 0
+		endUnix = 0
+		lastReset = 0
+		nextReset = 0
+	}
+
 	sub := &UserSubscription{
 		UserId:              userId,
 		PlanId:              plan.Id,
 		AmountTotal:         plan.TotalAmount,
 		AmountUsed:          0,
-		StartTime:           now.Unix(),
+		StartTime:           startTime,
 		EndTime:             endUnix,
-		Status:              "active",
+		Status:              subStatus,
 		Source:              source,
 		LastResetTime:       lastReset,
 		NextResetTime:       nextReset,
@@ -544,7 +607,95 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 	if err := tx.Create(sub).Error; err != nil {
 		return nil, err
 	}
+
+	if isPending {
+		pending := &PendingSubscriptionActivation{
+			UserId:             userId,
+			UserSubscriptionId: sub.Id,
+			PlanId:             plan.Id,
+			ActivationStrategy: SubscriptionActivationOnUse,
+			Status:             "pending",
+			ActivatedAt:        0,
+		}
+		if err := tx.Create(pending).Error; err != nil {
+			return nil, err
+		}
+	}
+
 	return sub, nil
+}
+
+// ActivatePendingSubscriptions activates all pending subscriptions for the given user.
+// Triggered on user login or first token use. Idempotent: rows already activated are skipped.
+func ActivatePendingSubscriptions(userId int) error {
+	if userId <= 0 {
+		return errors.New("invalid userId")
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var pendings []PendingSubscriptionActivation
+		if err := tx.Where("user_id = ? AND status = ?", userId, "pending").Find(&pendings).Error; err != nil {
+			return err
+		}
+		if len(pendings) == 0 {
+			return nil
+		}
+		nowUnix := GetDBTimestamp()
+		now := time.Unix(nowUnix, 0)
+		for _, p := range pendings {
+			plan, err := GetSubscriptionPlanById(p.PlanId)
+			if err != nil {
+				common.SysLog(fmt.Sprintf("ActivatePendingSubscriptions: failed to get plan %d: %v", p.PlanId, err))
+				continue
+			}
+			endUnix, err := calcPlanEndTime(now, plan)
+			if err != nil {
+				common.SysLog(fmt.Sprintf("ActivatePendingSubscriptions: failed to calc end time for plan %d: %v", p.PlanId, err))
+				continue
+			}
+			nextReset := calcNextResetTime(now, plan, endUnix)
+			lastReset := int64(0)
+			if nextReset > 0 {
+				lastReset = now.Unix()
+			}
+			if err := tx.Model(&UserSubscription{}).Where("id = ?", p.UserSubscriptionId).
+				Updates(map[string]interface{}{
+					"status":          "active",
+					"start_time":      now.Unix(),
+					"end_time":        endUnix,
+					"last_reset_time": lastReset,
+					"next_reset_time": nextReset,
+				}).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&PendingSubscriptionActivation{}).Where("id = ?", p.Id).
+				Updates(map[string]interface{}{
+					"status":       "activated",
+					"activated_at": now.Unix(),
+				}).Error; err != nil {
+				return err
+			}
+			if strings.TrimSpace(plan.UpgradeGroup) != "" {
+				_ = UpdateUserGroupCache(userId, plan.UpgradeGroup)
+			}
+		}
+		return nil
+	})
+}
+
+// HasPendingSubscriptions returns whether the user has any pending subscription activations.
+// Used by the token auth middleware to short-circuit activation checks.
+func HasPendingSubscriptions(userId int) (bool, error) {
+	if userId <= 0 {
+		return false, errors.New("invalid userId")
+	}
+	var count int64
+	err := DB.Model(&PendingSubscriptionActivation{}).
+		Where("user_id = ? AND status = ?", userId, "pending").
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // Complete a subscription order (idempotent). Creates a UserSubscription snapshot from the plan.
@@ -685,6 +836,12 @@ func ExpireSubscriptionOrder(tradeNo string, expectedPaymentProvider string) err
 
 // Admin bind (no payment). Creates a UserSubscription from a plan.
 func AdminBindSubscription(userId int, planId int, sourceNote string) (string, error) {
+	return AdminBindSubscriptionWithStrategy(userId, planId, "", sourceNote)
+}
+
+// AdminBindSubscriptionWithStrategy creates a UserSubscription with an optional
+// activation strategy. strategy="" or "immediate" yields the legacy behavior.
+func AdminBindSubscriptionWithStrategy(userId, planId int, strategy, sourceNote string) (string, error) {
 	if userId <= 0 || planId <= 0 {
 		return "", errors.New("invalid userId or planId")
 	}
@@ -692,16 +849,33 @@ func AdminBindSubscription(userId int, planId int, sourceNote string) (string, e
 	if err != nil {
 		return "", err
 	}
+	var upgradeGroup string
 	err = DB.Transaction(func(tx *gorm.DB) error {
-		_, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, "admin")
-		return err
+		sub, err := CreateUserSubscriptionFromPlanTxWithStrategy(tx, userId, plan, "admin", strategy)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(plan.UpgradeGroup) != "" && strategy != SubscriptionActivationOnUse {
+			var user User
+			if err := tx.Where("id = ?", userId).First(&user).Error; err != nil {
+				return err
+			}
+			if user.Group != plan.UpgradeGroup {
+				upgradeGroup = plan.UpgradeGroup
+				if err := tx.Model(&User{}).Where("id = ?", userId).Update("group", upgradeGroup).Error; err != nil {
+					return err
+				}
+			}
+		}
+		_ = sub
+		return nil
 	})
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(plan.UpgradeGroup) != "" {
-		_ = UpdateUserGroupCache(userId, plan.UpgradeGroup)
-		return fmt.Sprintf("用户分组将升级到 %s", plan.UpgradeGroup), nil
+	if upgradeGroup != "" {
+		_ = UpdateUserGroupCache(userId, upgradeGroup)
+		return fmt.Sprintf("用户分组将升级到 %s", upgradeGroup), nil
 	}
 	return "", nil
 }

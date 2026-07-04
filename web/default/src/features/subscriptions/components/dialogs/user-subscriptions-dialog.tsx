@@ -103,6 +103,7 @@ export function UserSubscriptionsDialog(props: Props) {
   const [plans, setPlans] = useState<PlanRecord[]>([])
   const [subs, setSubs] = useState<UserSubscriptionRecord[]>([])
   const [selectedPlanId, setSelectedPlanId] = useState<string>('')
+  const [selectedStrategy, setSelectedStrategy] = useState<string>('immediate')
   const [confirmAction, setConfirmAction] = useState<{
     type: 'invalidate' | 'delete'
     subId: number
@@ -136,6 +137,7 @@ export function UserSubscriptionsDialog(props: Props) {
   useEffect(() => {
     if (props.open && props.user?.id) {
       setSelectedPlanId('')
+      setSelectedStrategy('immediate')
       loadData()
     }
   }, [props.open, props.user?.id, loadData])
@@ -149,10 +151,12 @@ export function UserSubscriptionsDialog(props: Props) {
     try {
       const res = await createUserSubscription(props.user.id, {
         plan_id: Number(selectedPlanId),
+        activation_strategy: selectedStrategy || 'immediate',
       })
       if (res.success) {
         toast.success(res.data?.message || t('Added successfully'))
         setSelectedPlanId('')
+        setSelectedStrategy('immediate')
         await loadData()
         props.onSuccess?.()
       }
@@ -228,6 +232,18 @@ export function UserSubscriptionsDialog(props: Props) {
                       </SelectItem>
                     ))}
                   </SelectGroup>
+                </SelectContent>
+              </Select>
+              <Select
+                value={selectedStrategy}
+                onValueChange={(v) => v !== null && setSelectedStrategy(v)}
+              >
+                <SelectTrigger className='w-40'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value='immediate'>{t('Immediate')}</SelectItem>
+                  <SelectItem value='on_use'>{t('On Use')}</SelectItem>
                 </SelectContent>
               </Select>
               <Button

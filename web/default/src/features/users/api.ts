@@ -150,6 +150,34 @@ export async function getGroups(): Promise<ApiResponse<string[]>> {
 }
 
 // ============================================================================
+// Batch User Creation API
+// ============================================================================
+
+export interface BatchCreateUsersPayload {
+  prefix: string
+  date_suffix?: string
+  count: number
+  group?: string
+  role?: number
+  plan_id?: number
+  activation_strategy?: string
+  create_token?: boolean
+}
+
+export interface BatchCreateUsersResponse {
+  count: number
+  users: Array<{ id: number; username: string }>
+  message: string
+}
+
+export async function batchCreateUsers(
+  data: BatchCreateUsersPayload
+): Promise<ApiResponse<BatchCreateUsersResponse>> {
+  const res = await api.post('/api/user/batch', data)
+  return res.data
+}
+
+// ============================================================================
 // Admin Binding Management APIs
 // ============================================================================
 

@@ -115,6 +115,7 @@ export interface SubscriptionPayResponse {
 
 export interface CreateUserSubscriptionRequest {
   plan_id: number
+  activation_strategy?: string
 }
 
 // ============================================================================

@@ -349,8 +349,9 @@ func AdminUpdateSubscriptionPlanStatus(c *gin.Context) {
 }
 
 type AdminBindSubscriptionRequest struct {
-	UserId int `json:"user_id"`
-	PlanId int `json:"plan_id"`
+	UserId             int    `json:"user_id"`
+	PlanId             int    `json:"plan_id"`
+	ActivationStrategy string `json:"activation_strategy"`
 }
 
 func AdminBindSubscription(c *gin.Context) {
@@ -363,7 +364,13 @@ func AdminBindSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	msg, err := model.AdminBindSubscription(req.UserId, req.PlanId, "")
+	if req.ActivationStrategy != "" &&
+		req.ActivationStrategy != model.SubscriptionActivationImmediate &&
+		req.ActivationStrategy != model.SubscriptionActivationOnUse {
+		common.ApiErrorMsg(c, "无效的生效策略")
+		return
+	}
+	msg, err := model.AdminBindSubscriptionWithStrategy(req.UserId, req.PlanId, req.ActivationStrategy, "")
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -392,7 +399,8 @@ func AdminListUserSubscriptions(c *gin.Context) {
 }
 
 type AdminCreateUserSubscriptionRequest struct {
-	PlanId int `json:"plan_id"`
+	PlanId             int    `json:"plan_id"`
+	ActivationStrategy string `json:"activation_strategy"`
 }
 
 // AdminCreateUserSubscription creates a new user subscription from a plan (no payment).
@@ -411,7 +419,13 @@ func AdminCreateUserSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	msg, err := model.AdminBindSubscription(userId, req.PlanId, "")
+	if req.ActivationStrategy != "" &&
+		req.ActivationStrategy != model.SubscriptionActivationImmediate &&
+		req.ActivationStrategy != model.SubscriptionActivationOnUse {
+		common.ApiErrorMsg(c, "无效的生效策略")
+		return
+	}
+	msg, err := model.AdminBindSubscriptionWithStrategy(userId, req.PlanId, req.ActivationStrategy, "")
 	if err != nil {
 		common.ApiError(c, err)
 		return

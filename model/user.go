@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -305,6 +306,107 @@ func GetUserById(id int, selectAll bool) (*User, error) {
 		err = DB.Omit("password").First(&user, "id = ?", id).Error
 	}
 	return &user, err
+}
+
+type BatchCreateUserRequest struct {
+	Prefix             string `json:"prefix" validate:"required,min=1,max=10"`
+	DateSuffix         string `json:"date_suffix"`
+	Count              int    `json:"count" validate:"required,min=1,max=200"`
+	Group              string `json:"group"`
+	Role               int    `json:"role" validate:"max=1"`
+	PlanId             int    `json:"plan_id"`
+	ActivationStrategy string `json:"activation_strategy"`
+	CreateToken        bool   `json:"create_token"`
+}
+
+// BatchCreateUsers creates multiple users in a single transaction.
+// Username format: {prefix}{date_suffix}{seq} (seq padded to width required by count).
+// Password: {username}@123
+func BatchCreateUsers(req BatchCreateUserRequest) ([]User, error) {
+	seqWidth := len(strconv.Itoa(req.Count))
+	formatStr := fmt.Sprintf("%%s%%s%%0%dd", seqWidth)
+
+	usernames := make([]string, 0, req.Count)
+	for i := 1; i <= req.Count; i++ {
+		username := fmt.Sprintf(formatStr, req.Prefix, req.DateSuffix, i)
+		usernames = append(usernames, username)
+	}
+
+	// Pre-check for conflicts
+	if len(usernames) > 0 {
+		var existing []string
+		if err := DB.Model(&User{}).Where("username IN (?)", usernames).
+			Pluck("username", &existing).Error; err != nil {
+			return nil, err
+		}
+		if len(existing) > 0 {
+			return nil, fmt.Errorf("用户名已存在: %s", strings.Join(existing, ", "))
+		}
+	}
+
+	users := make([]User, 0, req.Count)
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		for _, username := range usernames {
+			hashedPwd, err := common.Password2Hash(username + "@123")
+			if err != nil {
+				return err
+			}
+			u := User{
+				Username:    username,
+				Password:    hashedPwd,
+				DisplayName: username,
+				Role:        req.Role,
+				Status:      common.UserStatusEnabled,
+				Group:       req.Group,
+				AffCode:     common.GetRandomString(4),
+			}
+			if req.Group == "" {
+				u.Group = "default"
+			}
+			if u.Role == 0 {
+				u.Role = common.RoleCommonUser
+			}
+			if err := tx.Create(&u).Error; err != nil {
+				return err
+			}
+
+			if req.PlanId > 0 {
+				_, err := CreateUserSubscriptionFromPlanTxWithStrategy(tx, u.Id, &SubscriptionPlan{Id: req.PlanId}, "batch", req.ActivationStrategy)
+				if err != nil {
+					return err
+				}
+			}
+
+			if req.CreateToken {
+				key, genErr := common.GenerateKey()
+				if genErr != nil {
+					return genErr
+				}
+				token := Token{
+					UserId:         u.Id,
+					Name:           username + "的初始令牌",
+					Key:            key,
+					CreatedTime:    common.GetTimestamp(),
+					AccessedTime:   common.GetTimestamp(),
+					ExpiredTime:    -1,
+					RemainQuota:    500000,
+					UnlimitedQuota: true,
+					Group:          "",
+				}
+				if setting.DefaultUseAutoGroup {
+					token.Group = "auto"
+				}
+				if err := tx.Create(&token).Error; err != nil {
+					return err
+				}
+			}
+
+			users = append(users, u)
+		}
+		return nil
+	})
+
+	return users, err
 }
 
 func GetUserIdByAffCode(affCode string) (int, error) {

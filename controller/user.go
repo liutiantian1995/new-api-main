@@ -21,6 +21,7 @@ import (
 
 	"github.com/QuantumNous/new-api/constant"
 
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 )
@@ -130,6 +131,12 @@ func recordLoginAudit(user *model.User, c *gin.Context) {
 // setup session & cookies and then return user info
 func setupLogin(user *model.User, c *gin.Context) {
 	model.UpdateUserLastLoginAt(user.Id)
+	// Activate pending on_use subscriptions on login (fire-and-forget, errors are logged only).
+	gopool.Go(func() {
+		if err := model.ActivatePendingSubscriptions(user.Id); err != nil {
+			common.SysLog(fmt.Sprintf("failed to activate pending subscriptions for user %d: %s", user.Id, err.Error()))
+		}
+	})
 	session := sessions.Default(c)
 	session.Set("id", user.Id)
 	session.Set("username", user.Username)
@@ -922,6 +929,70 @@ type ManageRequest struct {
 	Action string `json:"action"`
 	Value  int    `json:"value"`
 	Mode   string `json:"mode"`
+}
+
+type BatchCreateUsersRequest struct {
+	Prefix             string `json:"prefix" binding:"required"`
+	DateSuffix         string `json:"date_suffix"`
+	Count              int    `json:"count" binding:"required,min=1,max=200"`
+	Group              string `json:"group"`
+	Role               int    `json:"role"`
+	PlanId             int    `json:"plan_id"`
+	ActivationStrategy string `json:"activation_strategy"`
+	CreateToken        bool   `json:"create_token"`
+}
+
+// BatchCreateUsers creates multiple users in a single transaction.
+// Username format: {prefix}{date_suffix}{seq}, password: {username}@123
+func BatchCreateUsers(c *gin.Context) {
+	var req BatchCreateUsersRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	req.Prefix = strings.TrimSpace(req.Prefix)
+	if req.Prefix == "" {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	if req.ActivationStrategy != "" &&
+		req.ActivationStrategy != model.SubscriptionActivationImmediate &&
+		req.ActivationStrategy != model.SubscriptionActivationOnUse {
+		common.ApiErrorMsg(c, "无效的生效策略")
+		return
+	}
+	myRole := c.GetInt("role")
+	if req.Role >= myRole {
+		req.Role = common.RoleCommonUser
+	}
+	modelReq := model.BatchCreateUserRequest{
+		Prefix:             req.Prefix,
+		DateSuffix:         req.DateSuffix,
+		Count:              req.Count,
+		Group:              req.Group,
+		Role:               req.Role,
+		PlanId:             req.PlanId,
+		ActivationStrategy: req.ActivationStrategy,
+		CreateToken:        req.CreateToken,
+	}
+	users, err := model.BatchCreateUsers(modelReq)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	recordManageAuditFor(c, 0, "user.batch_create", map[string]interface{}{
+		"count":               len(users),
+		"prefix":              req.Prefix,
+		"group":               req.Group,
+		"plan_id":             req.PlanId,
+		"activation_strategy": req.ActivationStrategy,
+	})
+	common.ApiSuccess(c, gin.H{
+		"count":   len(users),
+		"users":   users,
+		"message": "批量创建成功，初始密码为 用户名@123",
+	})
+	return
 }
 
 // ManageUser Only admin user can do this
