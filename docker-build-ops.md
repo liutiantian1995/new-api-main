@@ -77,6 +77,8 @@ RUN go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$
 
 ### 4. 构建并推送
 
+#### 4.1 常规构建（带缓存）
+
 ```bash
 VERSION=$(cat VERSION)
 
@@ -92,6 +94,32 @@ docker buildx build \
 ```
 
 > **注意**：`--progress=plain` 可实时显示构建日志，便于排查问题。
+
+#### 4.2 强制无缓存构建（前端代码变更未生效时使用）
+
+当出现 **前端代码改动未反映到镜像中**（例如新增按钮、页面未更新）时，Docker build cache 可能复用了旧的 frontend `dist/`。此时必须使用 `--no-cache` 强制重建：
+
+```bash
+VERSION=$(cat VERSION)
+
+docker buildx build \
+  --builder desktop-linux \
+  --platform linux/amd64 \
+  --no-cache \
+  -t registry.cn-hangzhou.aliyuncs.com/study_yang/new-api:${VERSION} \
+  -t registry.cn-hangzhou.aliyuncs.com/study_yang/new-api:latest \
+  --push \
+  --progress=plain \
+  -f Dockerfile.aliyun \
+  .
+```
+
+> **何时使用 `--no-cache`**：
+> - 前端源码改动后构建，但镜像中仍是旧界面
+> - `COPY ./web/default ./default` 显示 `CACHED`，但源码已变
+> - 怀疑任何阶段的缓存层与实际代码不同步
+>
+> **代价**：耗时从 ~3 分钟增加到 ~10-15 分钟（所有阶段重新执行）
 
 ### 5. 验证推送结果
 
@@ -133,14 +161,33 @@ osascript -e 'quit app "Docker"' && sleep 5 && open -a Docker
 ENV GOPROXY=https://goproxy.cn,direct
 ```
 
-### Q4: `bun install` 下载慢或完整性校验失败
+### Q4: `bun install` 下载慢或 tarball 提取失败
 
-**原因**: Docker Desktop VM 内访问 npm registry 网络不稳定，导致 tarball 下载中断
+**原因**: Docker Desktop VM 内访问 npm registry 网络不稳定，导致 tarball 下载中断；特别是 `@esbuild/linux-x64` 等平台特定二进制包
 
-**解决**:
-- 不要使用 npmmirror 等国内镜像源（会导致 bun 完整性校验失败）
-- 保持 npm 官方源 `registry.npmjs.org`，等待网络恢复后重试
-- 如持续失败，可尝试重启 Docker Desktop VM
+**解决**（推荐方案，已验证有效）:
+
+在 Dockerfile 的两个前端构建阶段（`builder` 和 `builder-classic`）添加 `.npmrc`，将 registry 指向国内镜像：
+
+```dockerfile
+# 在 bun install 之前添加
+RUN echo 'registry=https://registry.npmmirror.com' > .npmrc \
+    && bun install --frozen-lockfile
+```
+
+> **关键点**：
+> - `bun:1` 镜像内没有 `npm` 命令，必须通过 `.npmrc` 配置 registry（bun 会读取该文件）
+> - `npmmirror` 国内镜像可同时加速普通包和平台特定二进制包的下载
+> - 经实测，此配置不会触发 bun 的完整性校验失败
+
+**错误示例**:
+```
+error: Fail extracting tarball for "@esbuild/linux-x64"
+```
+
+**其它备选**（如 npmmirror 仍失败）:
+- 重启 Docker Desktop VM
+- 等待网络恢复后重试（保持 npm 官方源）
 
 ### Q5: 如何只构建不推送？
 
@@ -155,15 +202,34 @@ docker buildx build \
   .
 ```
 
-### Q6: 如何构建多架构镜像（amd64 + arm64）？
+### Q6: 如何验证镜像是否包含最新前端代码？
 
-修改 `--platform` 参数：
+**原因**: Docker build cache 可能复用旧的 frontend `dist/`，导致镜像内容滞后于源码
+
+**快速验证**（推荐）：直接从镜像中提取二进制文件搜索关键字：
 
 ```bash
-docker buildx build \
-  --platform linux/amd64,linux/arm64 \
-  ...
+# 1. 创建临时容器并复制二进制
+docker create --name verify <镜像标签>
+docker cp verify:/new-api /tmp/verify-new-api
+docker rm verify
+
+# 2. 搜索关键字（如新增按钮的文字）
+strings /tmp/verify-new-api | grep "关键字"
 ```
+
+> **说明**: Go 二进制通过 `go:embed` 将 frontend dist 打包进去，`strings` 命令可检出嵌入的 JS chunk 中的文字
+
+### Q7: 镜像中前端功能缺失（缓存导致）
+
+**症状**: 源码已修改但镜像中仍是旧界面，`docker buildx build` 日志显示 `CACHED`
+
+**根因**: Docker layer caching 在 `COPY ./web/default ./default` 阶段命中缓存（该层及后续所有层均使用旧产物）
+
+**解决**:
+1. 添加 `--no-cache` 参数强制重建（见 4.2 节）
+2. 重新构建并推送
+3. 用 Q6 方法验证新镜像包含目标内容
 
 ---
 
@@ -216,3 +282,4 @@ docker buildx build \
 | Buildx 构建日志 | `docker-desktop://dashboard/build/...` |
 | 查看阿里云镜像 | 阿里云容器镜像服务控制台 |
 | 查看 buildx builder 状态 | `docker buildx inspect desktop-linux` |
+| 从镜像提取内容验证 | `docker create --name v <tag> && docker cp v:/new-api /tmp/v && strings /tmp/v \| grep "关键字"` |

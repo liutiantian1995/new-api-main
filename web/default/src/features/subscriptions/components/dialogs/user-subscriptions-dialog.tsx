@@ -79,6 +79,15 @@ function SubscriptionStatusBadge(props: {
         copyable={false}
       />
     )
+  // pending: 使用时生效策略下未激活的订阅（start_time=0, end_time=0）
+  if (props.sub.status === 'pending')
+    return (
+      <StatusBadge
+        label={props.t('Pending')}
+        variant='amber'
+        copyable={false}
+      />
+    )
   if (props.sub.status === 'cancelled')
     return (
       <StatusBadge

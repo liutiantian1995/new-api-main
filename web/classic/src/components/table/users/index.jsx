@@ -24,6 +24,7 @@ import UsersActions from './UsersActions';
 import UsersFilters from './UsersFilters';
 import UsersDescription from './UsersDescription';
 import AddUserModal from './modals/AddUserModal';
+import BatchCreateUserModal from './modals/BatchCreateUserModal';
 import EditUserModal from './modals/EditUserModal';
 import { useUsersData } from '../../../hooks/users/useUsersData';
 import { useIsMobile } from '../../../hooks/common/useIsMobile';
@@ -36,10 +37,13 @@ const UsersPage = () => {
   const {
     // Modal state
     showAddUser,
+    showBatchCreate,
     showEditUser,
     editingUser,
     setShowAddUser,
+    setShowBatchCreate,
     closeAddUser,
+    closeBatchCreate,
     closeEditUser,
     refresh,
 
@@ -53,6 +57,7 @@ const UsersPage = () => {
     groupOptions,
     loading,
     searching,
+    getFormValues,
 
     // Description state
     compactMode,
@@ -68,6 +73,12 @@ const UsersPage = () => {
         refresh={refresh}
         visible={showAddUser}
         handleClose={closeAddUser}
+      />
+
+      <BatchCreateUserModal
+        refresh={refresh}
+        visible={showBatchCreate}
+        handleClose={closeBatchCreate}
       />
 
       <EditUserModal
@@ -88,7 +99,13 @@ const UsersPage = () => {
         }
         actionsArea={
           <div className='flex flex-col md:flex-row justify-between items-center gap-2 w-full'>
-            <UsersActions setShowAddUser={setShowAddUser} t={t} />
+            <UsersActions
+              setShowAddUser={setShowAddUser}
+              setShowBatchCreate={setShowBatchCreate}
+              searchKeyword={getFormValues().searchKeyword}
+              searchGroup={getFormValues().searchGroup}
+              t={t}
+            />
 
             <UsersFilters
               formInitValues={formInitValues}

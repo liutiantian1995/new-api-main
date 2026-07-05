@@ -30,7 +30,7 @@ import {
 import { BadgeCell } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
 import { LongText } from '@/components/long-text'
-import { StatusBadge } from '@/components/status-badge'
+import { StatusBadge, type StatusVariant } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
 import {
   USER_STATUS,
@@ -45,6 +45,18 @@ function getQuotaProgressColor(percentage: number): string {
   if (percentage <= 10) return '[&_[data-slot=progress-indicator]]:bg-rose-500'
   if (percentage <= 30) return '[&_[data-slot=progress-indicator]]:bg-amber-500'
   return '[&_[data-slot=progress-indicator]]:bg-emerald-500'
+}
+
+// 订阅状态 → StatusBadge variant 与 i18n key 的映射。
+// 与后端 model.GetBatchUserSubscriptionStatuses 输出的状态字符串保持一致：active/pending/expired/cancelled。
+const SUBSCRIPTION_STATUS_CONFIG: Record<
+  string,
+  { variant: StatusVariant; labelKey: string }
+> = {
+  active: { variant: 'success', labelKey: 'Active' },
+  pending: { variant: 'amber', labelKey: 'Pending' },
+  expired: { variant: 'neutral', labelKey: 'Expired' },
+  cancelled: { variant: 'neutral', labelKey: 'Invalidated' },
 }
 
 export function useUsersColumns(): ColumnDef<User>[] {
@@ -266,6 +278,43 @@ export function useUsersColumns(): ColumnDef<User>[] {
       },
       enableSorting: false,
       size: 120,
+    },
+    {
+      id: 'subscription_statuses',
+      accessorKey: 'subscription_statuses',
+      header: t('Subscription Status'),
+      cell: ({ row }) => {
+        // 后端按固定顺序拼接（如 "active,pending"），前端按逗号拆分展示多个 badge
+        const text = (row.getValue('subscription_statuses') as string) || ''
+        if (!text) {
+          return (
+            <StatusBadge
+              label={t('No Subscription')}
+              variant='neutral'
+              copyable={false}
+            />
+          )
+        }
+        const statuses = text.split(',').filter(Boolean)
+        return (
+          <div className='flex min-w-0 flex-wrap items-center gap-1'>
+            {statuses.map((s, idx) => {
+              const cfg = SUBSCRIPTION_STATUS_CONFIG[s]
+              return (
+                <StatusBadge
+                  key={`${s}-${idx}`}
+                  label={t(cfg.labelKey)}
+                  variant={cfg.variant}
+                  copyable={false}
+                />
+              )
+            })}
+          </div>
+        )
+      },
+      enableSorting: false,
+      size: 160,
+      meta: { mobileHidden: true },
     },
     {
       id: 'invite_info',

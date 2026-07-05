@@ -85,6 +85,36 @@ func GetAllUserTokens(userId int, startIdx int, num int) ([]*Token, error) {
 	return tokens, err
 }
 
+// GetBatchFirstUserTokenKeys 批量查询每个用户最早创建的 token key（按 id 升序，第一条即最旧）。
+// 返回 map[userId]string，无 token 的用户不在 map 中（Key 为空字符串也不放入，避免 CSV 出现空 API 密钥列）。
+// GORM 会自动过滤 DeletedAt 软删除记录。
+func GetBatchFirstUserTokenKeys(userIds []int) (map[int]string, error) {
+	result := make(map[int]string, len(userIds))
+	if len(userIds) == 0 {
+		return result, nil
+	}
+
+	var tokens []Token
+	// ORDER BY id ASC 让每个用户的最旧 token 排在前面；Go 层只取每个 userId 的第一条
+	if err := DB.
+		Where("user_id IN ?", userIds).
+		Order("id asc").
+		Find(&tokens).Error; err != nil {
+		return nil, err
+	}
+
+	for _, t := range tokens {
+		if _, exists := result[t.UserId]; exists {
+			continue
+		}
+		if t.Key == "" {
+			continue
+		}
+		result[t.UserId] = t.Key
+	}
+	return result, nil
+}
+
 // sanitizeLikePattern 校验并清洗用户输入的 LIKE 搜索模式。
 // 规则：
 //  1. 转义 ! 和 _（使用 ! 作为 ESCAPE 字符，兼容 MySQL/PostgreSQL/SQLite）

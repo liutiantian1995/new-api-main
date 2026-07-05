@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1551,4 +1552,71 @@ func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error
 		sub.AmountUsed = newUsed
 		return tx.Save(&sub).Error
 	})
+}
+
+// subscriptionStatusOrder 定义订阅状态在拼接字符串中的稳定排序顺序。
+// 字典序即可保证 "active,expired,pending" 这样的输出，便于前端解析和回归测试。
+var subscriptionStatusOrder = map[string]int{
+	"active":    0,
+	"expired":   1,
+	"pending":   2,
+	"cancelled": 3,
+}
+
+// GetBatchUserSubscriptionStatuses 批量查询多个用户的订阅状态（仅查询 active/pending 记录，
+// 在 Go 层对 active 记录按 end_time 复核，过期自动转为 expired）。
+// 返回 map[userId]string，值是去重后按固定顺序逗号拼接（如 "active,pending"）。
+// 仅返回有过匹配记录的用户，无订阅的用户不在 map 中。
+func GetBatchUserSubscriptionStatuses(userIds []int) (map[int]string, error) {
+	result := make(map[int]string, len(userIds))
+	if len(userIds) == 0 {
+		return result, nil
+	}
+
+	var subs []UserSubscription
+	// 仅查 active/pending：cancelled/expired 不在用户列表展示中体现（已作废/已过期）
+	if err := DB.
+		Where("user_id IN (?) AND status IN ?", userIds, []string{"active", "pending"}).
+		Find(&subs).Error; err != nil {
+		return nil, err
+	}
+
+	now := common.GetTimestamp()
+	// 每用户用 map[string]bool 去重
+	statusSetByUser := make(map[int]map[string]bool, len(userIds))
+	for _, sub := range subs {
+		if statusSetByUser[sub.UserId] == nil {
+			statusSetByUser[sub.UserId] = make(map[string]bool)
+		}
+		// active 复核：end_time 已过 → expired
+		if sub.Status == "active" && sub.EndTime > 0 && sub.EndTime < now {
+			statusSetByUser[sub.UserId]["expired"] = true
+		} else {
+			statusSetByUser[sub.UserId][sub.Status] = true
+		}
+	}
+
+	for userId, set := range statusSetByUser {
+		statuses := make([]string, 0, len(set))
+		for s := range set {
+			statuses = append(statuses, s)
+		}
+		// 按 subscriptionStatusOrder 中定义的顺序排序，保证输出稳定
+		sort.Slice(statuses, func(i, j int) bool {
+			oi, oki := subscriptionStatusOrder[statuses[i]]
+			oj, okj := subscriptionStatusOrder[statuses[j]]
+			if !oki {
+				oi = len(subscriptionStatusOrder)
+			}
+			if !okj {
+				oj = len(subscriptionStatusOrder)
+			}
+			if oi != oj {
+				return oi < oj
+			}
+			return statuses[i] < statuses[j]
+		})
+		result[userId] = strings.Join(statuses, ",")
+	}
+	return result, nil
 }

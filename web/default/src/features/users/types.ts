@@ -57,6 +57,8 @@ export const userSchema = z.object({
   last_login_at: z.number().optional(),
   DeletedAt: z.any().nullable().optional(),
   remark: z.string().optional(),
+  // 后端批量填充的订阅状态：去重后按固定顺序逗号拼接（如 "active,pending"），无订阅时为空字符串。
+  subscription_statuses: z.string().optional(),
 })
 export type User = z.infer<typeof userSchema>
 

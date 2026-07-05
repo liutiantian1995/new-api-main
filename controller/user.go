@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -286,6 +288,9 @@ func GetAllUsers(c *gin.Context) {
 		return
 	}
 
+	// 批量填充订阅状态（仅在用户列表展示用，失败不阻断列表加载）
+	_ = fillSubscriptionStatuses(users)
+
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
 
@@ -315,10 +320,94 @@ func SearchUsers(c *gin.Context) {
 		return
 	}
 
+	// 批量填充订阅状态（仅在用户列表展示用，失败不阻断列表加载）
+	_ = fillSubscriptionStatuses(users)
+
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
 	common.ApiSuccess(c, pageInfo)
 	return
+}
+
+// fillSubscriptionStatuses 批量填充每个用户的 SubscriptionStatuses 字段（基于 active/pending 订阅，
+// active 复核 end_time 后过期转 expired）。失败仅返回 error，调用方可决定是否记录日志。
+func fillSubscriptionStatuses(users []*model.User) error {
+	if len(users) == 0 {
+		return nil
+	}
+	userIds := make([]int, 0, len(users))
+	for _, u := range users {
+		if u != nil {
+			userIds = append(userIds, u.Id)
+		}
+	}
+	statusMap, err := model.GetBatchUserSubscriptionStatuses(userIds)
+	if err != nil {
+		return err
+	}
+	for _, u := range users {
+		if u == nil {
+			continue
+		}
+		u.SubscriptionStatuses = statusMap[u.Id] // map miss 时为零值 ""，即无订阅
+	}
+	return nil
+}
+
+// ExportUsersCsv 导出当前搜索条件下的用户凭据为 CSV：用户名、密码（=username@123，动态生成）、API 密钥（最早创建的一个）。
+// 上限 10000 条，避免一次拉取过多；CSV 写 UTF-8 BOM 让 Excel 正确显示中文。
+func ExportUsersCsv(c *gin.Context) {
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	group := c.Query("group")
+
+	// 复用 SearchUsers，limit 10000 防止过大
+	const exportHardLimit = 10000
+	users, _, err := model.SearchUsers(keyword, group, nil, nil, 0, exportHardLimit)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	// 批量获取每个用户最早创建的 token key
+	userIds := make([]int, 0, len(users))
+	for _, u := range users {
+		if u != nil {
+			userIds = append(userIds, u.Id)
+		}
+	}
+	tokenKeys, _ := model.GetBatchFirstUserTokenKeys(userIds) // 失败不阻断导出，仅 API 密钥列留空
+
+	// CSV 响应头：含日期的文件名 + UTF-8 BOM（Excel 中文兼容）
+	filename := fmt.Sprintf("users-%s.csv", time.Now().Format("20060102"))
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Writer.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
+
+	w := csv.NewWriter(c.Writer)
+	if err := w.Write([]string{"用户名", "密码", "API密钥"}); err != nil {
+		common.SysError("写入 CSV 表头失败: " + err.Error())
+		return
+	}
+	for _, u := range users {
+		if u == nil {
+			continue
+		}
+		password := u.Username + "@123"
+		apiKey := tokenKeys[u.Id] // 无 token 时为零值 ""
+		// Token.Key 在 DB 中存裸 key（不带前缀），用户调用 API 时需以 sk- 开头
+		// 与前端展示约定保持一致（tokens/index.jsx、chat-links.ts 等均拼 sk- 前缀）
+		if apiKey != "" {
+			apiKey = "sk-" + apiKey
+		}
+		if err := w.Write([]string{u.Username, password, apiKey}); err != nil {
+			common.SysError("写入 CSV 行失败: " + err.Error())
+			return
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		common.SysError("CSV Flush 失败: " + err.Error())
+	}
 }
 
 func canManageTargetRole(myRole int, targetRole int) bool {

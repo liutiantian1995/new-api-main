@@ -70,6 +70,39 @@ const renderRole = (role, t) => {
   }
 };
 
+// 订阅状态 → Tag 颜色/文案配置。与 default 主题 SubscriptionStatusBadge 语义保持一致。
+const subscriptionStatusMap = {
+  active: { color: 'green', label: '生效' },
+  pending: { color: 'orange', label: '未生效' },
+  expired: { color: 'grey', label: '已过期' },
+  cancelled: { color: 'grey', label: '已作废' },
+};
+
+// 渲染 subscription_statuses 字段（逗号拼接的状态字符串，如 "active,pending"）。
+// 后端已按固定顺序拼接，前端再按逗号拆分展示多个 Tag。
+const renderSubscriptionStatuses = (text, t) => {
+  if (!text) {
+    return (
+      <Tag color='grey' size='small'>
+        {t('无订阅')}
+      </Tag>
+    );
+  }
+  const statuses = text.split(',').filter(Boolean);
+  return (
+    <Space spacing={4} wrap>
+      {statuses.map((s, i) => {
+        const cfg = subscriptionStatusMap[s] || { color: 'grey', label: s };
+        return (
+          <Tag key={i} color={cfg.color} size='small'>
+            {t(cfg.label)}
+          </Tag>
+        );
+      })}
+    </Space>
+  );
+};
+
 /**
  * Render username with remark
  */
@@ -351,6 +384,11 @@ export const getUsersColumns = ({
       render: (text, record, index) => {
         return <div>{renderRole(text, t)}</div>;
       },
+    },
+    {
+      title: t('订阅状态'),
+      dataIndex: 'subscription_statuses',
+      render: (text) => renderSubscriptionStatuses(text, t),
     },
     {
       title: t('邀请信息'),

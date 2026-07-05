@@ -83,9 +83,17 @@ const batchFormSchema = z.object({
 
 type BatchFormValues = z.infer<typeof batchFormSchema>
 
+// 默认日期后缀：当天 MMDD（如 0705），基于浏览器本地时区
+const getDefaultDateSuffix = (): string => {
+  const now = new Date()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${month}${day}`
+}
+
 const DEFAULT_VALUES: BatchFormValues = {
   prefix: '',
-  date_suffix: '',
+  date_suffix: getDefaultDateSuffix(),
   count: 10,
   group: '',
   role: 1,
@@ -190,7 +198,7 @@ export function BatchCreateDrawer({
                     </FormControl>
                     <FormDescription>
                       {t(
-                        'Usernames will be generated as {prefix}{date}{seq}, e.g. user060101'
+                        'Usernames will be generated as {prefix}{date}{random}, e.g. user0601ab3x7y'
                       )}
                     </FormDescription>
                     <FormMessage />
@@ -211,7 +219,7 @@ export function BatchCreateDrawer({
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('Leave empty to skip date in username')}
+                      {t('Defaults to today (MMDD), leave to use today')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

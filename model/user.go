@@ -54,6 +54,10 @@ type User struct {
 	StripeCustomer   string         `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
 	CreatedAt        int64          `json:"created_at" gorm:"autoCreateTime;column:created_at"`
 	LastLoginAt      int64          `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+
+	// SubscriptionStatuses 仅用于前端展示，存放当前用户所有订阅状态去重后的逗号拼接（如 "active,pending"）。
+	// 不持久化到数据库，由 controller 层批量填充。
+	SubscriptionStatuses string `json:"subscription_statuses" gorm:"-:all"`
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -320,28 +324,59 @@ type BatchCreateUserRequest struct {
 }
 
 // BatchCreateUsers creates multiple users in a single transaction.
-// Username format: {prefix}{date_suffix}{seq} (seq padded to width required by count).
+// Username format: {prefix}{date_suffix}{6-char-random} (random alphanumeric).
+// Auto-avoids conflicts with existing usernames and within the batch itself.
 // Password: {username}@123
 func BatchCreateUsers(req BatchCreateUserRequest) ([]User, error) {
-	seqWidth := len(strconv.Itoa(req.Count))
-	formatStr := fmt.Sprintf("%%s%%s%%0%dd", seqWidth)
+	const (
+		randomSuffixLen    = 6
+		maxUsernameLen     = 20
+		maxRetriesPerUser  = 10
+	)
 
-	usernames := make([]string, 0, req.Count)
-	for i := 1; i <= req.Count; i++ {
-		username := fmt.Sprintf(formatStr, req.Prefix, req.DateSuffix, i)
-		usernames = append(usernames, username)
+	// 1. 长度校验：Username 字段约束为 max=20
+	totalLen := len(req.Prefix) + len(req.DateSuffix) + randomSuffixLen
+	if totalLen > maxUsernameLen {
+		return nil, fmt.Errorf(
+			"用户名过长：前缀(%d)+日期(%d)+随机(%d)=%d 超过 %d 字符，请缩短前缀或日期后缀",
+			len(req.Prefix), len(req.DateSuffix), randomSuffixLen, totalLen, maxUsernameLen,
+		)
 	}
 
-	// Pre-check for conflicts
-	if len(usernames) > 0 {
-		var existing []string
-		if err := DB.Model(&User{}).Where("username IN (?)", usernames).
-			Pluck("username", &existing).Error; err != nil {
-			return nil, err
+	// 2. 查询 prefix+date_suffix 开头的已存在用户名，避免与历史批量冲突
+	namePrefix := req.Prefix + req.DateSuffix
+	var existing []string
+	if err := DB.Model(&User{}).Where("username LIKE ?", namePrefix+"%").
+		Pluck("username", &existing).Error; err != nil {
+		return nil, err
+	}
+	existingSet := make(map[string]bool, len(existing))
+	for _, n := range existing {
+		existingSet[n] = true
+	}
+
+	// 3. 生成 count 个唯一用户名：批量内 + 数据库去重
+	usernames := make([]string, 0, req.Count)
+	used := make(map[string]bool, req.Count)
+	for i := 0; i < req.Count; i++ {
+		var name string
+		ok := false
+		for retry := 0; retry < maxRetriesPerUser; retry++ {
+			candidate := namePrefix + common.GetRandomString(randomSuffixLen)
+			if !used[candidate] && !existingSet[candidate] {
+				name = candidate
+				ok = true
+				break
+			}
 		}
-		if len(existing) > 0 {
-			return nil, fmt.Errorf("用户名已存在: %s", strings.Join(existing, ", "))
+		if !ok {
+			return nil, fmt.Errorf(
+				"无法生成唯一用户名（前缀=%s，已尝试 %d 次），请重试或更换前缀",
+				namePrefix, maxRetriesPerUser,
+			)
 		}
+		used[name] = true
+		usernames = append(usernames, name)
 	}
 
 	users := make([]User, 0, req.Count)
