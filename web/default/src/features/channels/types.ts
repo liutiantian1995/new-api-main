@@ -71,6 +71,16 @@ export const channelSchema = z.object({
     multi_key_mode: 'random',
   }),
   settings: z.string().default('{}'), // other_settings JSON
+  // token-aware routing（顶层 channel 字段，由后端持久化）
+  max_tokens: z.number().default(0),
+  token_tiers: z
+    .array(
+      z.object({
+        max_tokens: z.number(),
+        priority_boost: z.number(),
+      })
+    )
+    .default([]),
 })
 
 export type Channel = z.infer<typeof channelSchema>

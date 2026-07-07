@@ -208,6 +208,16 @@ export const channelFormSchema = z
     upstream_model_update_check_enabled: z.boolean().optional(),
     upstream_model_update_auto_sync_enabled: z.boolean().optional(),
     upstream_model_update_ignored_models: z.string().optional(),
+    // token-aware routing (persisted as top-level channel fields)
+    max_tokens: z.number().min(0).optional(),
+    token_tiers: z
+      .array(
+        z.object({
+          max_tokens: z.number().int().positive(),
+          priority_boost: z.number().int().min(-100).max(100),
+        })
+      )
+      .optional(),
   })
   .superRefine((data, ctx) => {
     if ([3, 8, 36, 45].includes(data.type) && !data.base_url?.trim()) {
@@ -348,6 +358,9 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   upstream_model_update_auto_sync_enabled: false,
   upstream_model_update_ignored_models: '',
   advanced_custom: '',
+  // token-aware routing 默认值：0 / [] 即不启用，保持向后兼容
+  max_tokens: 0,
+  token_tiers: [],
 }
 
 // ============================================================================
@@ -483,6 +496,10 @@ export function transformChannelToFormDefaults(
     upstream_model_update_auto_sync_enabled: upstreamModelUpdateAutoSyncEnabled,
     upstream_model_update_ignored_models: upstreamModelUpdateIgnoredModels,
     advanced_custom: advancedCustom,
+    // token-aware routing：旧渠道无配置时填默认值，保证 form 始终持有完整字段
+    max_tokens:
+      typeof channel.max_tokens === 'number' ? channel.max_tokens : 0,
+    token_tiers: Array.isArray(channel.token_tiers) ? channel.token_tiers : [],
   }
 }
 
@@ -663,6 +680,11 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
     header_override: formData.header_override || null,
     settings: buildSettingsJSON(formData),
     other: formData.other || '',
+    // token-aware routing 字段直接持久化在 channel 表，不进 settings JSON
+    max_tokens: formData.max_tokens ?? 0,
+    token_tiers: Array.isArray(formData.token_tiers)
+      ? formData.token_tiers
+      : [],
   }
 
   // Clean up empty strings to null for optional fields
@@ -711,6 +733,11 @@ export function transformFormDataToUpdatePayload(
     header_override: formData.header_override || null,
     settings: buildSettingsJSON(formData),
     other: formData.other || '',
+    // token-aware routing 字段直接持久化在 channel 表，不进 settings JSON
+    max_tokens: formData.max_tokens ?? 0,
+    token_tiers: Array.isArray(formData.token_tiers)
+      ? formData.token_tiers
+      : [],
   }
 
   // Only include key if it was changed (not empty)

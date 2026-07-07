@@ -17,6 +17,7 @@ type RetryParam struct {
 	ModelName    string
 	RequestPath  string
 	Retry        *int
+	EstTokens    int
 	resetNextTry bool
 }
 
@@ -81,15 +82,19 @@ func (p *RetryParam) ResetRetryNextTry() {
 //
 //	Retry=3: GroupB, priority1 (startRetryIndex=2, priorityRetry=1)
 //	         分组B, 优先级1
-func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, error) {
+// CacheGetRandomSatisfiedChannel tries to get a random channel that satisfies the requirements.
+// Returns the channel, the selected group, a fallback flag (true when max_tokens
+// soft-filtering removed every candidate and the full set was used), and an error.
+func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, bool, error) {
 	var channel *model.Channel
+	var fallback bool
 	var err error
 	selectGroup := param.TokenGroup
 	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
 
 	if param.TokenGroup == "auto" {
 		if len(setting.GetAutoGroups()) == 0 {
-			return nil, selectGroup, errors.New("auto groups is not enabled")
+			return nil, selectGroup, false, errors.New("auto groups is not enabled")
 		}
 		autoGroups := GetUserAutoGroup(userGroup)
 
@@ -116,7 +121,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry, param.RequestPath)
+			channel, fallback, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry, param.RequestPath, param.EstTokens)
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -154,10 +159,10 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath)
+		channel, fallback, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath, param.EstTokens)
 		if err != nil {
-			return nil, param.TokenGroup, err
+			return nil, param.TokenGroup, false, err
 		}
 	}
-	return channel, selectGroup, nil
+	return channel, selectGroup, fallback, nil
 }

@@ -24,7 +24,7 @@ import {
   type ParsedTier,
 } from '@/features/pricing/lib/billing-expr'
 import type { UsageLog } from '../data/schema'
-import type { LogOtherData } from '../types'
+import type { LogOtherData, RoutingInfoData } from '../types'
 
 export { normalizeTierLabel }
 
@@ -403,4 +403,137 @@ export function renderAuditContent(
   const template = AUDIT_TEMPLATES[op.action]
   if (!template) return null
   return t(template, (op.params ?? {}) as Record<string, unknown>)
+}
+
+/** Badge variant 颜色，与 StatusBadge 组件的 StatusVariant 对齐。 */
+export type RoutingBasisVariant = 'neutral' | 'success' | 'danger'
+
+/** t 函数签名：react-i18next 的 t 永远支持插值参数对象。 */
+export type TranslateFn = (
+  key: string,
+  params?: Record<string, unknown>
+) => string
+
+/**
+ * Routing basis values that the backend may write to `other.routing_info.basis`.
+ * `description` 是面向管理员的中文解释（说明这条路径是什么意思、什么时候触发）。
+ * `variant` 控制 badge 颜色：fallback 用 danger 醒目提示异常回退场景。
+ */
+export const ROUTING_BASIS_LABEL_MAP: Record<
+  string,
+  { label: string; variant: RoutingBasisVariant; description: string }
+> = {
+  tier_boost: {
+    label: 'Tier Boost',
+    variant: 'success',
+    description:
+      '分档提权：请求估算 token 命中渠道配置的 token_tiers 分档，base priority 被加分提权后，在加权随机中胜出。boost = effective - base。',
+  },
+  default: {
+    label: 'Default',
+    variant: 'neutral',
+    description:
+      '默认：未命中亲和、未触发回退，也未发生分档提权。渠道按 base priority 加权随机选出。',
+  },
+  fallback: {
+    label: 'Fallback',
+    variant: 'danger',
+    description:
+      '回退（异常）：估算 token 超过所有候选渠道的 max_tokens，已退回到全集合选渠道，可能选到会被上游拒长的渠道。建议调大候选渠道 max_tokens 或补足大容量渠道。',
+  },
+  affinity: {
+    label: 'Affinity',
+    variant: 'success',
+    description:
+      '亲和命中：复用该分组/模型上一次成功的渠道，跳过加权随机。由渠道亲和性规则或 auto 分组记忆产生。',
+  },
+}
+
+/**
+ * 后端写入 `other.routing_info` 的字段形状。类型定义在 `types.ts` 中，这里 re-export
+ * 以便调用方就近引用。
+ */
+export type { RoutingInfoData } from '../types'
+
+/**
+ * 决策路径的四个阶段，按后端 `model/routing_basis.go` 的判定顺序。
+ * `active` 表示本次请求走到的分支；用于 tooltip 中可视化高亮当前路径。
+ */
+export interface RoutingBasisStep {
+  key: string
+  label: string
+  description: string
+}
+
+export const ROUTING_BASIS_DECISION_PATH: RoutingBasisStep[] = [
+  {
+    key: 'fallback',
+    label: 'Fallback',
+    description:
+      '所有候选 max_tokens < estTokens？是 → 全集合回退（fallback）',
+  },
+  {
+    key: 'affinity',
+    label: 'Affinity',
+    description: '命中渠道亲和？是 → 直接复用上次成功渠道（affinity）',
+  },
+  {
+    key: 'tier_boost',
+    label: 'Tier Boost',
+    description:
+      'estTokens 命中分档且 effective > base？是 → 分档提权后加权随机（tier_boost）',
+  },
+  {
+    key: 'default',
+    label: 'Default',
+    description: '以上都没命中 → 按 base priority 加权随机（default）',
+  },
+]
+
+/**
+ * Resolve an i18n label + badge variant for a routing basis string.
+ * Unknown values fall back to a neutral display of the raw string.
+ */
+export function getRoutingBasisLabel(
+  basis: string | undefined,
+  t: TranslateFn
+): { label: string; variant: RoutingBasisVariant } {
+  if (!basis) return { label: t('Not Recorded'), variant: 'neutral' }
+  const entry = ROUTING_BASIS_LABEL_MAP[basis]
+  if (!entry) return { label: basis, variant: 'neutral' }
+  return { label: t(entry.label), variant: entry.variant }
+}
+
+/**
+ * 生成一行"人话摘要"，让管理员不用看具体数字也能秒懂这次为什么走这条路径。
+ * 返回 null 表示 basis 缺失或未知，调用方应回退到纯标签展示。
+ */
+export function getRoutingBasisSummary(
+  info: RoutingInfoData | undefined,
+  t: TranslateFn
+): string | null {
+  if (!info?.basis) return null
+  if (!ROUTING_BASIS_LABEL_MAP[info.basis]) return null
+
+  const boost = Number(info.boost ?? 0)
+  const est = Number(info.est_tokens ?? 0)
+
+  switch (info.basis) {
+    case 'tier_boost':
+      return t('Routing basis summary · tier_boost', {
+        est,
+        boost,
+        base: Number(info.base_priority ?? 0),
+        effective: Number(info.effective_priority ?? 0),
+        tier_max: Number(info.tier_max_tokens ?? 0),
+      })
+    case 'fallback':
+      return t('Routing basis summary · fallback', { est })
+    case 'affinity':
+      return t('Routing basis summary · affinity')
+    case 'default':
+      return t('Routing basis summary · default')
+    default:
+      return null
+  }
 }

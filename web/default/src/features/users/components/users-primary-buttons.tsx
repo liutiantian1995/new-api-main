@@ -44,7 +44,7 @@ export function UsersPrimaryButtons() {
     setOpen('batch_create')
   }
 
-  // 下载当前搜索条件下的用户凭据 CSV（username/password/api_key）
+  // 下载当前搜索条件下的用户凭据 TXT（用户/密码/key 三行一组）
   // 与列表过滤保持一致：复用 URL 中的 keyword 与 group；后端硬性上限 10000 条
   // 走 api axios 实例：拦截器自动注入 New-Api-User header，
   // 浏览器导航（window.location.href）不会携带该 header，会被鉴权中间件拒绝
@@ -60,14 +60,14 @@ export function UsersPrimaryButtons() {
     const url = '/api/user/export' + (qs ? '?' + qs : '')
     try {
       const res = await api.get(url, { responseType: 'blob' })
-      // 从 Content-Disposition 解析文件名，回退到 users.csv
+      // 从 Content-Disposition 解析文件名，回退到 users.txt
       const cd = res.headers['content-disposition'] || ''
       const m = /filename="?([^";]+)"?/.exec(cd)
-      const blob = new Blob([res.data], { type: 'text/csv;charset=utf-8;' })
+      const blob = new Blob([res.data], { type: 'text/plain;charset=utf-8;' })
       const downloadUrl = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = downloadUrl
-      a.download = m ? m[1] : 'users.csv'
+      a.download = m ? m[1] : 'users.txt'
       a.click()
       URL.revokeObjectURL(downloadUrl)
     } catch {

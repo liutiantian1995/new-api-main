@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -354,9 +353,10 @@ func fillSubscriptionStatuses(users []*model.User) error {
 	return nil
 }
 
-// ExportUsersCsv 导出当前搜索条件下的用户凭据为 CSV：用户名、密码（=username@123，动态生成）、API 密钥（最早创建的一个）。
-// 上限 10000 条，避免一次拉取过多；CSV 写 UTF-8 BOM 让 Excel 正确显示中文。
-func ExportUsersCsv(c *gin.Context) {
+// ExportUsersTxt 导出当前搜索条件下的用户凭据为 TXT：每条记录一行
+// 「用户: xxx  密码: xxx  key: xxx」，字段间用空格分隔。
+// 上限 10000 条，避免一次拉取过多；写 UTF-8 BOM 让记事本/Excel 正确显示中文。
+func ExportUsersTxt(c *gin.Context) {
 	keyword := strings.TrimSpace(c.Query("keyword"))
 	group := c.Query("group")
 
@@ -375,19 +375,15 @@ func ExportUsersCsv(c *gin.Context) {
 			userIds = append(userIds, u.Id)
 		}
 	}
-	tokenKeys, _ := model.GetBatchFirstUserTokenKeys(userIds) // 失败不阻断导出，仅 API 密钥列留空
+	tokenKeys, _ := model.GetBatchFirstUserTokenKeys(userIds) // 失败不阻断导出，仅 key 字段留空
 
-	// CSV 响应头：含日期的文件名 + UTF-8 BOM（Excel 中文兼容）
-	filename := fmt.Sprintf("users-%s.csv", time.Now().Format("20060102"))
-	c.Header("Content-Type", "text/csv; charset=utf-8")
+	// TXT 响应头：含日期的文件名 + UTF-8 BOM（记事本/Excel 中文兼容）
+	filename := fmt.Sprintf("users-%s.txt", time.Now().Format("20060102"))
+	c.Header("Content-Type", "text/plain; charset=utf-8")
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	c.Writer.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
 
-	w := csv.NewWriter(c.Writer)
-	if err := w.Write([]string{"用户名", "密码", "API密钥"}); err != nil {
-		common.SysError("写入 CSV 表头失败: " + err.Error())
-		return
-	}
+	var b strings.Builder
 	for _, u := range users {
 		if u == nil {
 			continue
@@ -399,14 +395,16 @@ func ExportUsersCsv(c *gin.Context) {
 		if apiKey != "" {
 			apiKey = "sk-" + apiKey
 		}
-		if err := w.Write([]string{u.Username, password, apiKey}); err != nil {
-			common.SysError("写入 CSV 行失败: " + err.Error())
-			return
-		}
+		b.WriteString("用户: ")
+		b.WriteString(u.Username)
+		b.WriteString("  密码: ")
+		b.WriteString(password)
+		b.WriteString("  key: ")
+		b.WriteString(apiKey)
+		b.WriteString("\r\n")
 	}
-	w.Flush()
-	if err := w.Error(); err != nil {
-		common.SysError("CSV Flush 失败: " + err.Error())
+	if _, err := c.Writer.Write([]byte(b.String())); err != nil {
+		common.SysError("写入 TXT 失败: " + err.Error())
 	}
 }
 

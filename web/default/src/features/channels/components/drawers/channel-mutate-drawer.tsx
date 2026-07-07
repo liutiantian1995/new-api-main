@@ -165,6 +165,7 @@ import {
   ChannelBasicSection,
   ChannelEditorLoadingState,
   ChannelModelsSection,
+  TokenRoutingSection,
 } from './sections'
 
 type ChannelMutateDrawerProps = {
@@ -2616,6 +2617,9 @@ export function ChannelMutateDrawer({
                             )}
                           />
                         </div>
+
+                        {/* token-aware routing 配置 */}
+                        <TokenRoutingSection />
 
                         <FormField
                           control={form.control}

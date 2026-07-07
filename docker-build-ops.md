@@ -283,3 +283,51 @@ docker buildx build \
 | 查看阿里云镜像 | 阿里云容器镜像服务控制台 |
 | 查看 buildx builder 状态 | `docker buildx inspect desktop-linux` |
 | 从镜像提取内容验证 | `docker create --name v <tag> && docker cp v:/new-api /tmp/v && strings /tmp/v \| grep "关键字"` |
+
+## Token 路由策略（rc.15+）
+
+`v1.0.0-rc.15` 起新增 **token-aware channel routing**：按请求估算 token 数动态调整渠道选择。配置在渠道编辑页「Token 路由策略」面板。
+
+### 字段说明
+
+| 字段 | 类型 | 默认 | 含义 |
+|------|------|------|------|
+| `max_tokens` | int | 0 | 该渠道能稳定承载的最大 estTokens；超过则软过滤跳过。0=不限 |
+| `token_tiers[].max_tokens` | int (>0) | — | 分档阈值，estTokens ≤ 此值时触发对应 boost |
+| `token_tiers[].priority_boost` | int [-100, 100] | — | 累加到该渠道 effective_priority |
+
+### 行为示例
+
+- 渠道 A：`max_tokens=200000`，用户发 1M token 请求 → A 被软过滤，路由到大容量渠道
+- 渠道 B：`token_tiers=[{50000, +5}]`，请求 30K → effective_priority = base+5
+- 全部渠道都被 max_tokens 过滤 → 回退到全集合，响应 header 加 `X-Token-Routing-Fallback: max-tokens-exceeded`
+- affinity 命中渠道但 estTokens > affinityCh.max_tokens → 亲和失效，重新选 channel
+
+### 不影响全局路由的保证
+
+1. **零成本默认**：未配置时（`max_tokens=0, token_tiers=[]`），effective_priority = base priority，行为同 main 分支
+2. **软过滤不丢请求**：max_tokens 全空时回退全集合，绝不返回 503
+3. **估算廉价**：100KB body 估算 ~0.7ms；50 渠道 filter+priority 计算 <0.001ms
+4. **非文本路径跳过**：MJ/Suno/audio/images/realtime 路径不估算，零开销
+5. **回滚方式**：清空渠道的 max_tokens 和 token_tiers 即恢复原行为，无 schema 变更
+
+### tier 边界 buffer 建议
+
+- 上游真实 limit 的 80% 作为 `max_tokens`（留 buffer 防止边界失败）
+- 分档阈值参考典型请求规模：`{32K, +3}` `{128K, +2}` `{200K, -5}`（负值表示大请求降权）
+- 避免极端 priority_boost（>50）导致 tier 跨度过大
+
+### 已知限制
+
+- `token_tiers` 单渠道上限 10 条（服务端 + 客户端双重限制）
+- 估算偏差 ±20%，配置 `max_tokens` 时建议留 15-20% buffer
+- `X-Token-Routing-Fallback: max-tokens-exceeded` header 表示本次因 estTokens 超过所有候选 `max_tokens` 而走了全集合（非错误，仅诊断信号）
+
+### 代码审查问题修复（v1.0.0-rc.15-batch4）
+
+| 问题 | 严重级 | 修复 |
+|------|--------|------|
+| 包级 `tokenRoutingFallbackSeen` 在 RLock 内写入导致数据竞争 + 跨请求串扰 | CRITICAL | 删除包级状态，`GetRandomSatisfiedChannel`/`CacheGetRandomSatisfiedChannel` 多返回 `fallback bool`，由调用方直接使用 |
+| 服务端缺 `token_tiers` 数量上限校验，可被恶意 PUT 放大 CPU | HIGH | `controller/channel.go validateChannel` 加 `len(TokenTiers) <= 10`，补单元测试 |
+| Classic 主题 `Form.InputNumber field='max_tokens'` 与 props 双源 | HIGH | 改纯受控 `InputNumber`，submit 时显式从 inputs state 读取 |
+

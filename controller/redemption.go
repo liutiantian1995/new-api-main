@@ -1,8 +1,11 @@
 package controller
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
@@ -58,6 +61,46 @@ func GetRedemption(c *gin.Context) {
 		"data":    redemption,
 	})
 	return
+}
+
+// ExportRedemptionsTxt 导出当前搜索条件下的兑换码为 TXT：每行「名称: 代码」。
+// 上限 10000 条，避免一次拉取过多；写 UTF-8 BOM 让记事本/Excel 正确显示中文。
+func ExportRedemptionsTxt(c *gin.Context) {
+	keyword := strings.TrimSpace(c.Query("keyword"))
+
+	// 复用现有查询，limit 10000 防止过大
+	const exportHardLimit = 10000
+	var redemptions []*model.Redemption
+	var err error
+	if keyword != "" {
+		redemptions, _, err = model.SearchRedemptions(keyword, 0, exportHardLimit)
+	} else {
+		redemptions, _, err = model.GetAllRedemptions(0, exportHardLimit)
+	}
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	// TXT 响应头：含日期的文件名 + UTF-8 BOM（记事本/Excel 中文兼容）
+	filename := fmt.Sprintf("redemptions-%s.txt", time.Now().Format("20060102"))
+	c.Header("Content-Type", "text/plain; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Writer.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
+
+	var b strings.Builder
+	for _, r := range redemptions {
+		if r == nil {
+			continue
+		}
+		b.WriteString(r.Name)
+		b.WriteString(": ")
+		b.WriteString(r.Key)
+		b.WriteString("\r\n")
+	}
+	if _, err := c.Writer.Write([]byte(b.String())); err != nil {
+		common.SysError("写入 TXT 失败: " + err.Error())
+	}
 }
 
 func AddRedemption(c *gin.Context) {

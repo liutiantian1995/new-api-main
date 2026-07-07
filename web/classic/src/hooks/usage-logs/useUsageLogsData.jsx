@@ -51,6 +51,7 @@ export const useLogsData = () => {
     TIME: 'time',
     CHANNEL: 'channel',
     USERNAME: 'username',
+    ROUTING_BASIS: 'routing_basis',
     TOKEN: 'token',
     GROUP: 'group',
     TYPE: 'type',
@@ -114,6 +115,7 @@ export const useLogsData = () => {
       [COLUMN_KEYS.TIME]: true,
       [COLUMN_KEYS.CHANNEL]: isAdminUser,
       [COLUMN_KEYS.USERNAME]: isAdminUser,
+      [COLUMN_KEYS.ROUTING_BASIS]: false,
       [COLUMN_KEYS.TOKEN]: true,
       [COLUMN_KEYS.GROUP]: true,
       [COLUMN_KEYS.TYPE]: true,
@@ -144,6 +146,7 @@ export const useLogsData = () => {
         merged[COLUMN_KEYS.CHANNEL] = false;
         merged[COLUMN_KEYS.USERNAME] = false;
         merged[COLUMN_KEYS.RETRY] = false;
+        merged[COLUMN_KEYS.ROUTING_BASIS] = false;
       }
 
       return merged;

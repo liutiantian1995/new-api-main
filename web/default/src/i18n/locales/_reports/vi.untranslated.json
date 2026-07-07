@@ -1,0 +1,8 @@
+{
+  "Create a default API token for each user with unlimited quota": "Create a default API token for each user with unlimited quota",
+  "Create multiple users at once with generated usernames and passwords": "Create multiple users at once with generated usernames and passwords",
+  "Leave empty to skip date in username": "Leave empty to skip date in username",
+  "Leave empty to use default group": "Leave empty to use default group",
+  "On Use: subscription starts counting when user first logs in or uses a token": "On Use: subscription starts counting when user first logs in or uses a token",
+  "Optional: bind a subscription plan to each created user": "Optional: bind a subscription plan to each created user"
+}

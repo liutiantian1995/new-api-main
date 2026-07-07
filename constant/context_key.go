@@ -38,6 +38,18 @@ const (
 	ContextKeyChannelMultiKeyIndex     ContextKey = "channel_multi_key_index"
 	ContextKeyChannelKey               ContextKey = "channel_key"
 
+	// ContextKeyTokenRoutingFallback records that the current request triggered the
+	// token-aware max_tokens soft-filter fallback (all candidates were filtered out
+	// and the full set was restored). Distributor reads this to set the
+	// X-Token-Routing-Fallback response header.
+	ContextKeyTokenRoutingFallback ContextKey = "token_routing_fallback"
+
+	// ContextKeyRoutingBasis stores the routing decision metadata (basis type,
+	// est_tokens, base/effective priority, boost, fallback) computed by the
+	// distributor after channel selection. RecordConsumeLog reads it to persist
+	// into Log.Other.routing_info (admin-only).
+	ContextKeyRoutingBasis ContextKey = "routing_basis"
+
 	ContextKeyAutoGroup           ContextKey = "auto_group"
 	ContextKeyAutoGroupIndex      ContextKey = "auto_group_index"
 	ContextKeyAutoGroupRetryIndex ContextKey = "auto_group_retry_index"
