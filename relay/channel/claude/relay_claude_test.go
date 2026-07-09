@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/stretchr/testify/require"
 )
@@ -328,4 +329,102 @@ func TestRequestOpenAI2ClaudeMessage_ClaudeOpus48ThinkingUsesAdaptiveHighEffort(
 	require.Nil(t, claudeRequest.Temperature)
 	require.Nil(t, claudeRequest.TopP)
 	require.Nil(t, claudeRequest.TopK)
+}
+
+// TestRequestOpenAI2ClaudeMessage_ToolInputSchemaDropsNullRequiredAndProperties 验证
+// OpenAI -> Claude 转换时，tool parameters 中值为 null 的 required / properties
+// 不应在 input_schema 中产出 "required":null / "properties":null。
+// 严格遵循 JSON Schema metaschema 的上游会因 required 必须为 array 而返回 400。
+func TestRequestOpenAI2ClaudeMessage_ToolInputSchemaDropsNullRequiredAndProperties(t *testing.T) {
+	tests := []struct {
+		name           string
+		parameters     map[string]any
+		wantRequired   string // 期望 marshal 后 required 字段的 JSON 值片段，空串表示字段不应存在
+		wantProperties bool   // 是否应存在 properties 字段
+	}{
+		{
+			name: "required omitted",
+			parameters: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"city": map[string]any{"type": "string"}},
+			},
+			wantProperties: true,
+		},
+		{
+			name: "required explicit null",
+			parameters: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+				"required":   nil,
+			},
+			wantProperties: true,
+		},
+		{
+			name: "properties null",
+			parameters: map[string]any{
+				"type":       "object",
+				"properties": nil,
+			},
+			wantProperties: false,
+		},
+		{
+			name: "required array preserved",
+			parameters: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+				"required":   []any{"city"},
+			},
+			wantRequired:   `["city"]`,
+			wantProperties: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := dto.GeneralOpenAIRequest{
+				Model: "claude-3-5-sonnet",
+				Messages: []dto.Message{
+					{Role: "user", Content: "hi"},
+				},
+				Tools: []dto.ToolCallRequest{
+					{
+						Type: "function",
+						Function: dto.FunctionRequest{
+							Name:       "get_weather",
+							Parameters: tt.parameters,
+						},
+					},
+				},
+			}
+
+			claudeReq, err := RequestOpenAI2ClaudeMessage(nil, request)
+			require.NoError(t, err)
+
+			tools, ok := claudeReq.Tools.([]any)
+			require.True(t, ok, "tools must be []any")
+			require.Len(t, tools, 1)
+
+			tool, ok := tools[0].(*dto.Tool)
+			require.True(t, ok, "tool must be *dto.Tool")
+
+			data, err := common.Marshal(tool)
+			require.NoError(t, err)
+			jsonStr := string(data)
+
+			// 核心契约：绝不产出 null 值的 required / properties
+			require.NotContains(t, jsonStr, `"required":null`)
+			require.NotContains(t, jsonStr, `"properties":null`)
+
+			if tt.wantRequired != "" {
+				require.Contains(t, jsonStr, `"required":`+tt.wantRequired)
+			} else {
+				require.NotContains(t, jsonStr, `"required":`)
+			}
+			if tt.wantProperties {
+				require.Contains(t, jsonStr, `"properties":`)
+			} else {
+				require.NotContains(t, jsonStr, `"properties":`)
+			}
+		})
+	}
 }

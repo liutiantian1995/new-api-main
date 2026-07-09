@@ -57,8 +57,14 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 			if params["type"] != nil {
 				claudeTool.InputSchema["type"] = params["type"].(string)
 			}
-			claudeTool.InputSchema["properties"] = params["properties"]
-			claudeTool.InputSchema["required"] = params["required"]
+			// 仅写入非 nil 的字段，避免产出 "required":null / "properties":null，
+			// 否则严格 JSON Schema metaschema 校验的上游会因 required 必须为 array 而返回 400。
+			if v := params["properties"]; v != nil {
+				claudeTool.InputSchema["properties"] = v
+			}
+			if v := params["required"]; v != nil {
+				claudeTool.InputSchema["required"] = v
+			}
 			for s, a := range params {
 				if s == "type" || s == "properties" || s == "required" {
 					continue
