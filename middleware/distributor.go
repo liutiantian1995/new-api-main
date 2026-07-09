@@ -585,7 +585,7 @@ func pathSupportsTokenEstimation(path string) bool {
 	}
 	// Text-capable paths: OpenAI chat/completions & completions, Anthropic
 	// /v1/messages, Gemini /v1beta/models/* and /v1/models/*, embeddings,
-	// and playground chat.
+	// playground chat, and OpenAI Responses API /v1/responses.
 	if strings.HasSuffix(path, "/chat/completions") || strings.HasSuffix(path, "/completions") {
 		return true
 	}
@@ -596,6 +596,9 @@ func pathSupportsTokenEstimation(path string) bool {
 		return true
 	}
 	if strings.Contains(path, ":generateContent") || strings.Contains(path, ":streamGenerateContent") {
+		return true
+	}
+	if strings.HasSuffix(path, "/responses") {
 		return true
 	}
 	return false

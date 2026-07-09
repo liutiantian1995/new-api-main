@@ -11,6 +11,7 @@ import (
 //   - OpenAI Completions:               prompt (string 或 array)
 //   - Gemini:                           contents[*].parts[*].text
 //   - Embeddings:                       input (string 或 array)
+//   - OpenAI Responses API:             instructions (string) + input (string 或 message array with nested content)
 //
 // 算法：非 CJK 4 字符 ≈ 1 token，CJK 1.5 字符 ≈ 1 token。未知协议或空 body 返回 0。
 // 不修改 body、不报错，纯函数无副作用。
@@ -68,13 +69,57 @@ func extractTextForEstimation(body []byte) string {
 		})
 	}
 
-	// Embeddings: input (string 或 array)
+	// OpenAI Responses API: instructions (string)
+	instructions := gjson.GetBytes(body, "instructions")
+	if instructions.Type == gjson.String {
+		sb = append(sb, instructions.String()...)
+	}
+
+	// Embeddings / OpenAI Responses API: input
+	// Embeddings input: string or array of strings
+	// Responses API input: string, or array of message objects with nested
+	// content[].text (e.g. {type:"message", content:[{type:"input_text", text:"..."}]})
 	input := gjson.GetBytes(body, "input")
 	if input.Exists() {
-		sb = appendContentText(sb, input)
+		sb = appendResponsesInputText(sb, input)
 	}
 
 	return string(sb)
+}
+
+// appendResponsesInputText extracts text from an `input` field that may be a
+// plain string, a flat array of strings/objects, or a Responses API array of
+// message objects with nested content.
+func appendResponsesInputText(buf []byte, v gjson.Result) []byte {
+	switch {
+	case v.Type == gjson.String:
+		return append(buf, v.String()...)
+	case v.IsArray():
+		v.ForEach(func(_, item gjson.Result) bool {
+			if item.Type == gjson.String {
+				buf = append(buf, item.String()...)
+				return true
+			}
+			if item.IsObject() {
+				// Direct {type:"text"/"input_text", text:"..."}
+				if t := item.Get("text"); t.Type == gjson.String {
+					buf = append(buf, t.String()...)
+				}
+				// Nested message: {type:"message", content:[{type:"input_text", text:"..."}]}
+				content := item.Get("content")
+				if content.IsArray() {
+					content.ForEach(func(_, c gjson.Result) bool {
+						if t := c.Get("text"); t.Type == gjson.String {
+							buf = append(buf, t.String()...)
+						}
+						return true
+					})
+				}
+			}
+			return true
+		})
+	}
+	return buf
 }
 
 // appendContentText 把 gjson 结果（可能是 string、array of {type:"text",text:"..."} 或 array of string）的文本部分追加到 buf。

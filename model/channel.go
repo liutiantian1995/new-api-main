@@ -577,6 +577,12 @@ func (channel *Channel) Update() error {
 	if err != nil {
 		return err
 	}
+	// GORM Updates(struct) skips zero-value fields; max_tokens=0 and empty
+	// token_tiers are valid configurations and must be persisted explicitly.
+	err = DB.Model(channel).Select("max_tokens", "token_tiers").Updates(channel).Error
+	if err != nil {
+		return err
+	}
 	DB.Model(channel).First(channel, "id = ?", channel.Id)
 	err = channel.UpdateAbilities(nil)
 	return err
