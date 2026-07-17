@@ -638,6 +638,18 @@ func UpdateUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserInputInvalid, map[string]any{"Error": err.Error()})
 		return
 	}
+	// Validate rolling_rate_limit JSON if provided. The per-user override is
+	// stored as a tier list (array); we wrap it as a single-group object so we
+	// can reuse the existing group-config validator (map[string][]tier).
+	if updatedUser.RollingRateLimit != "" {
+		wrapped := fmt.Sprintf(`{"_user_": %s}`, updatedUser.RollingRateLimit)
+		if err := setting.CheckRollingRateLimitGroup(wrapped); err != nil {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams, map[string]any{
+				"Error": fmt.Sprintf("rolling_rate_limit: %s", err.Error()),
+			})
+			return
+		}
+	}
 	originUser, err := model.GetUserById(updatedUser.Id, false)
 	if err != nil {
 		common.ApiError(c, err)
