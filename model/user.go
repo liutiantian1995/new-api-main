@@ -48,6 +48,7 @@ type User struct {
 	DeletedAt        gorm.DeletedAt             `gorm:"index"`
 	LinuxDOId        string                     `json:"linux_do_id" gorm:"column:linux_do_id;index"`
 	Setting          string                     `json:"setting" gorm:"type:text;column:setting"`
+	RollingRateLimit string                     `json:"rolling_rate_limit" gorm:"type:varchar(2048)"`
 	Remark           string                     `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
 	StripeCustomer   string                     `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
 	CreatedAt        int64                      `json:"created_at" gorm:"autoCreateTime;column:created_at"`
@@ -57,13 +58,14 @@ type User struct {
 
 func (user *User) ToBaseUser() *UserBase {
 	cache := &UserBase{
-		Id:       user.Id,
-		Group:    user.Group,
-		Quota:    user.Quota,
-		Status:   user.Status,
-		Username: user.Username,
-		Setting:  user.Setting,
-		Email:    user.Email,
+		Id:               user.Id,
+		Group:            user.Group,
+		Quota:            user.Quota,
+		Status:           user.Status,
+		Username:         user.Username,
+		Setting:          user.Setting,
+		Email:            user.Email,
+		RollingRateLimit: user.RollingRateLimit,
 	}
 	return cache
 }

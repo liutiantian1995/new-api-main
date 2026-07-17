@@ -15,13 +15,14 @@ import (
 
 // UserBase struct remains the same as it represents the cached data structure
 type UserBase struct {
-	Id       int    `json:"id"`
-	Group    string `json:"group"`
-	Email    string `json:"email"`
-	Quota    int    `json:"quota"`
-	Status   int    `json:"status"`
-	Username string `json:"username"`
-	Setting  string `json:"setting"`
+	Id               int    `json:"id"`
+	Group            string `json:"group"`
+	Email            string `json:"email"`
+	Quota            int    `json:"quota"`
+	Status           int    `json:"status"`
+	Username         string `json:"username"`
+	Setting          string `json:"setting"`
+	RollingRateLimit string `json:"rolling_rate_limit"`
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {
@@ -31,6 +32,7 @@ func (user *UserBase) WriteContext(c *gin.Context) {
 	common.SetContextKey(c, constant.ContextKeyUserEmail, user.Email)
 	common.SetContextKey(c, constant.ContextKeyUserName, user.Username)
 	common.SetContextKey(c, constant.ContextKeyUserSetting, user.GetSetting())
+	common.SetContextKey(c, constant.ContextKeyUserRollingRateLimit, user.RollingRateLimit)
 }
 
 func (user *UserBase) GetSetting() dto.UserSetting {
@@ -94,6 +96,9 @@ func updateUserCache(user User) error {
 	if err := updateUserNameCache(user.Id, user.Username); err != nil {
 		return err
 	}
+	if err := updateUserRollingRateLimitCache(user.Id, user.RollingRateLimit); err != nil {
+		return err
+	}
 	return updateUserSettingCache(user.Id, user.Setting)
 }
 
@@ -127,13 +132,14 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 
 	// Create cache object from user data
 	userCache = &UserBase{
-		Id:       user.Id,
-		Group:    user.Group,
-		Quota:    user.Quota,
-		Status:   user.Status,
-		Username: user.Username,
-		Setting:  user.Setting,
-		Email:    user.Email,
+		Id:               user.Id,
+		Group:            user.Group,
+		Quota:            user.Quota,
+		Status:           user.Status,
+		Username:         user.Username,
+		Setting:          user.Setting,
+		Email:            user.Email,
+		RollingRateLimit: user.RollingRateLimit,
 	}
 
 	return userCache, nil
@@ -254,6 +260,13 @@ func updateUserSettingCache(userId int, setting string) error {
 		return nil
 	}
 	return common.RedisHSetField(getUserCacheKey(userId), "Setting", setting)
+}
+
+func updateUserRollingRateLimitCache(userId int, rrl string) error {
+	if !common.RedisEnabled {
+		return nil
+	}
+	return common.RedisHSetField(getUserCacheKey(userId), "RollingRateLimit", rrl)
 }
 
 // GetUserLanguage returns the user's language preference from cache
