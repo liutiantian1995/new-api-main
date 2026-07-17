@@ -1,0 +1,5 @@
+{
+  "Complements the minute-rate limiter: this controls long-term request quotas (5h / 1d / 1w).": "Complements the minute-rate limiter: this controls long-term request quotas (5h / 1d / 1w).",
+  "First tier to be exceeded triggers 429. Durations must be unique.": "First tier to be exceeded triggers 429. Durations must be unique.",
+  "No rolling window quotas configured. Click \"Add group\" to get started.": "No rolling window quotas configured. Click \"Add group\" to get started."
+}
