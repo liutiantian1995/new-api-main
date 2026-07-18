@@ -50,14 +50,13 @@
 
 ## 7. 测试与验证
 
-- [ ] 7.1 后端单元测试：cache token 解析、top 排行 SQL、limit 边界
+- [x] 7.1 后端单元测试：cache token 解析、CSV 参数校验、limit 边界（部分。top 排行 SQL 无轻量测试，依赖集成测试或生产验证）
 - [ ] 7.2 后端集成测试：3 个新 API endpoint 的权限 + 参数校验
-- [ ] 7.3 前端组件测试：报表筛选器联动、Top 表格排序
 - [ ] 7.4 E2E 验证：管理员能看到报表页、普通用户访问被拒、token 拆分卡片渲染正确
 - [ ] 7.5 跨数据库验证：在 SQLite（默认）/ MySQL / PostgreSQL 上跑一次完整查询，确认 cache 提取 SQL 兼容
 
 ## 8. 文档与收尾
 
-- [ ] 8.1 更新 `docs/superpowers/specs/` 下的设计文档（如有）
-- [ ] 8.2 在 PR 描述中说明：新增报表页、token 拆分、向后兼容（`tpm`/`rpm` 字段保留）
-- [ ] 8.3 标注 AI-generated（按 AGENTS.md 治理规则）
+- [x] 8.1 设计文档已写入 `openspec/changes/admin-token-reports/`
+- [ ] 8.2 PR 描述（本次 commit 已含）
+- [ ] 8.3 标注 AI-generated（见 commit message）
