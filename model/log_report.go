@@ -177,8 +177,13 @@ func sumCachedTokensForFilter(startTimestamp, endTimestamp int64, channelIds []i
 }
 
 // scanCachedTokens runs the cache scan and optionally accumulates per-key totals.
-// When accumulator is non-nil, it is keyed by channel_id (mode="channel") or
-// user_id (mode="user"). Otherwise, only the grand total is returned.
+// When accumulator is non-nil, it is keyed by the ID dimension chosen by the
+// caller (channel_id when called from the channel top-N path; user_id from
+// the user top-N path). Otherwise, only the grand total is returned.
+//
+// All filter arguments MUST be honored — both the global filter set
+// (channelIds/userIds/group) AND the per-dimension ID restriction
+// (channelIds/userIds non-empty) so we do not scan the entire time range.
 func scanCachedTokens(startTimestamp, endTimestamp int64, channelIds []int, userIds []int, group string, accumulator map[int]int) int {
 	type row struct {
 		Other     string `gorm:"column:other"`
@@ -203,55 +208,52 @@ func scanCachedTokens(startTimestamp, endTimestamp int64, channelIds []int, user
 		}
 		total += c
 		if accumulator != nil {
-			// Prefer channel key when caller is the channel top-N path.
-			// Caller chooses which ID to inject via the accumulator contents;
-			// we set both keys and let the consumer pick.
-			if r.ChannelID != 0 {
+			// Caller chooses which dimension to accumulate by passing
+			// either channelIds or userIds above. We mirror that here
+			// by checking which ID field was requested.
+			if len(channelIds) > 0 && r.ChannelID != 0 {
 				accumulator[r.ChannelID] += c
+			} else if len(userIds) > 0 && r.UserID != 0 {
+				accumulator[r.UserID] += c
 			}
 		}
 	}
 	return total
 }
 
-// populateTopCachedTokensChannel fills CachedTokens per row by scanning logs.
-// Reuses one scan pass for all channels.
+// populateTopCachedTokensChannel fills CachedTokens per row.
+// IMPORTANT: scans only logs whose channel_id matches one of the rows
+// already in `rows`, never the entire time range. This bounds the scan
+// to at most len(rows) channel buckets.
 func populateTopCachedTokensChannel(rows *[]TopChannelRow, startTimestamp, endTimestamp int64) {
 	if len(*rows) == 0 {
 		return
 	}
+	channelIds := make([]int, 0, len(*rows))
+	for _, r := range *rows {
+		channelIds = append(channelIds, r.ChannelID)
+	}
 	perChannel := make(map[int]int)
-	scanCachedTokens(startTimestamp, endTimestamp, nil, nil, "", perChannel)
+	scanCachedTokens(startTimestamp, endTimestamp, channelIds, nil, "", perChannel)
 	for i := range *rows {
 		(*rows)[i].CachedTokens = perChannel[(*rows)[i].ChannelID]
 	}
 }
 
-// populateTopCachedTokensUser fills CachedTokens per row by scanning logs.
+// populateTopCachedTokensUser fills CachedTokens per row.
+// IMPORTANT: scans only logs whose user_id matches one of the rows
+// already in `rows`, never the entire time range. This bounds the scan
+// to at most len(rows) user buckets.
 func populateTopCachedTokensUser(rows *[]TopUserRow, startTimestamp, endTimestamp int64) {
 	if len(*rows) == 0 {
 		return
 	}
-	type row struct {
-		Other  string `gorm:"column:other"`
-		UserID int    `gorm:"column:user_id"`
-	}
-	var scans []row
-	err := LOG_DB.Table("logs").
-		Select("other, user_id").
-		Where("type = ?", LogTypeConsume).
-		Where("other != ''").
-		Where("created_at >= ?", startTimestamp).
-		Where("created_at <= ?", endTimestamp).
-		Scan(&scans).Error
-	if err != nil {
-		common.SysLog("failed to scan logs for user cache tokens: " + err.Error())
-		return
+	userIds := make([]int, 0, len(*rows))
+	for _, r := range *rows {
+		userIds = append(userIds, r.UserID)
 	}
 	perUser := make(map[int]int)
-	for _, r := range scans {
-		perUser[r.UserID] += extractCacheTokens(r.Other)
-	}
+	scanCachedTokens(startTimestamp, endTimestamp, nil, userIds, "", perUser)
 	for i := range *rows {
 		(*rows)[i].CachedTokens = perUser[(*rows)[i].UserID]
 	}

@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { ChevronDown, ChevronUp, Plus, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -61,24 +61,52 @@ function parseTiers(value: string): RollingRateLimitTier[] {
 export function RollingRateLimitField({ value, onChange, groupName }: Props) {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(() => parseTiers(value).length > 0)
+  // Stable per-tier React keys; parallel to `tiers` and never reordered.
+  // Decouples key identity from mutable duration/limit so input focus is
+  // preserved when the user edits a value in place.
+  const [tierIds, setTierIds] = useState<number[]>(() => {
+    const n = parseTiers(value).length
+    return Array.from({ length: n }, (_, i) => i)
+  })
+  let nextIdRef = useRef(0)
+  if (tierIds.length > 0) {
+    nextIdRef.current = Math.max(nextIdRef.current, ...tierIds) + 1
+  }
 
   const tiers = parseTiers(value)
 
   const updateTiers = (next: RollingRateLimitTier[]) => {
     onChange(next.length === 0 ? '' : JSON.stringify(next))
   }
+  const syncTierIds = (nextTiers: RollingRateLimitTier[], prevTiers: RollingRateLimitTier[]) => {
+    if (nextTiers.length > prevTiers.length) {
+      // Added: append fresh IDs for the new tail
+      const added = nextTiers.length - prevTiers.length
+      const start = nextIdRef.current
+      nextIdRef.current += added
+      setTierIds((prev) => [...prev, ...Array.from({ length: added }, (_, i) => start + i)])
+    } else if (nextTiers.length < prevTiers.length) {
+      // Removed: trim to the shorter length
+      setTierIds((prev) => prev.slice(0, nextTiers.length))
+    }
+  }
 
   const addTier = (duration: number) => {
-    updateTiers([...tiers, { duration, limit: 1000 }])
+    const next = [...tiers, { duration, limit: 1000 }]
+    syncTierIds(next, tiers)
+    updateTiers(next)
   }
 
   const removeTier = (index: number) => {
-    updateTiers(tiers.filter((_, i) => i !== index))
+    const next = tiers.filter((_, i) => i !== index)
+    syncTierIds(next, tiers)
+    updateTiers(next)
   }
 
   const updateTier = (index: number, field: 'duration' | 'limit', v: number) => {
     const next = [...tiers]
     next[index] = { ...next[index], [field]: v }
+    // No structural change; tier IDs unchanged
     updateTiers(next)
   }
 
@@ -113,7 +141,7 @@ export function RollingRateLimitField({ value, onChange, groupName }: Props) {
             </p>
           )}
           {tiers.map((tier, index) => (
-            <div key={`${tier.duration}-${tier.limit}`} className='grid grid-cols-12 items-end gap-2'>
+            <div key={tierIds[index] ?? index} className='grid grid-cols-12 items-end gap-2'>
               <div className='col-span-5'>
                 <FormLabel className='text-xs'>
                   {t('Duration (sec)')}

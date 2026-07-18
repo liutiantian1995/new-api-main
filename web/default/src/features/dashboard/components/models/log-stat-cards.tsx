@@ -97,18 +97,24 @@ export function LogStatCards(props: LogStatCardsProps) {
     setTimeRangeMinutes(timeDiff)
 
     const params = buildQueryParams(timeRange, filters)
-    const fetchFn = isAdmin
-      ? api.get<{ success: boolean; data: LogStat }>('/api/log/stat', { params })
+    type StatResponse = { success: boolean; data: LogStat }
+    type QuotaDataResponse = { success: boolean; data: QuotaDataItem[] }
+
+    const promise: Promise<StatResponse | QuotaDataResponse> = isAdmin
+      ? api
+          .get<StatResponse>('/api/log/stat', { params })
+          .then((r) => r.data)
       : getUserQuotaDates(params, false)
 
-    Promise.resolve(fetchFn)
-      .then((res: any) => {
+    promise
+      .then((data: StatResponse | QuotaDataResponse) => {
         if (abortController.signal.aborted) return
-        const data = isAdmin ? res.data?.data : res?.data
-        if (isAdmin && data) {
-          setStats(data)
-        } else if (Array.isArray(data)) {
-          const c = calculateDashboardStats(data)
+        const payload = (data as QuotaDataResponse)?.data
+        if (isAdmin && !Array.isArray(payload)) {
+          setStats(payload as LogStat)
+          onDataUpdate?.([], false)
+        } else if (Array.isArray(payload)) {
+          const c = calculateDashboardStats(payload)
           setStats({
             quota: c.totalQuota,
             rpm: c.totalCount,
@@ -119,8 +125,8 @@ export function LogStatCards(props: LogStatCardsProps) {
             total_tokens: c.totalTokens,
             request_count: c.totalCount,
           })
+          onDataUpdate?.(payload, false)
         }
-        onDataUpdate?.(Array.isArray(data) ? data : [], false)
       })
       .catch(() => {
         if (abortController.signal.aborted) return

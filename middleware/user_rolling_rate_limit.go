@@ -136,20 +136,32 @@ func checkRollingLimit(c *gin.Context, key string, maxCount int, duration int64)
 	rdb := common.RDB
 	listLength, err := rdb.LLen(ctx, key).Result()
 	if err != nil {
-		return false
+		// Fail-open on Redis errors: a transient outage should not block
+		// legitimate traffic. Log so operators can diagnose.
+		common.SysLog("rolling rate limit: LLen error, allowing request: " + err.Error())
+		return true
 	}
 	if listLength < int64(maxCount) {
 		return true
 	}
-	oldTimeStr, _ := rdb.LIndex(ctx, key, -1).Result()
+	oldTimeStr, err := rdb.LIndex(ctx, key, -1).Result()
+	if err != nil {
+		// redis.Nil (list shrank between LLen and LIndex) or transient error:
+		// allow the request rather than 429 on stale state.
+		common.SysLog("rolling rate limit: LIndex error, allowing request: " + err.Error())
+		return true
+	}
 	oldTime, err := time.Parse(timeFormat, oldTimeStr)
 	if err != nil {
-		return false
+		// Unparseable timestamp (corrupted entry): allow rather than 429.
+		common.SysLog("rolling rate limit: bad timestamp in list, allowing request")
+		return true
 	}
 	nowTimeStr := time.Now().Format(timeFormat)
 	nowTime, err := time.Parse(timeFormat, nowTimeStr)
 	if err != nil {
-		return false
+		// Practically unreachable (we just formatted the time), but be safe.
+		return true
 	}
 	if int64(nowTime.Sub(oldTime).Seconds()) < duration {
 		rdb.Expire(ctx, key, rollingLimitTTL(duration))

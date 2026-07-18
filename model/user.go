@@ -557,6 +557,14 @@ func (user *User) Edit(updatePassword bool) error {
 	return updateUserCache(*user)
 }
 
+// EditWithTx persists the whitelisted set of editable user fields within tx.
+//
+// Callers that mutate RollingRateLimit MUST also invalidate the user's Redis
+// cache (model.InvalidateUserCache) or refresh it (model.updateUserCache)
+// after this returns. The cache hash carries RollingRateLimit as a separate
+// field and will otherwise serve stale overrides for up to
+// common.RedisKeyCacheSeconds(). See controller.UpdateUser for the canonical
+// invalidation call site.
 func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
 	var err error
 	if updatePassword {
