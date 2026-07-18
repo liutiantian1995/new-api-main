@@ -37,14 +37,14 @@
 
 ## 5. 前端侧边栏注册（default 主题）
 
-- [ ] 5.1 修改 `web/default/src/hooks/use-sidebar-data.ts`，在 `admin.navGroups[0].items` 末尾追加 `{ title: t('Reports'), url: '/admin/reports', icon: BarChart3, requiredRole: ROLE.ADMIN }`
-- [ ] 5.2 修改 `use-sidebar-config.ts` 的 `URL_TO_CONFIG_MAP`，添加 `/admin/reports` → `{ section: 'admin', module: 'reports' }`
-- [ ] 5.3 修改 `DEFAULT_SIDEBAR_MODULES` 的 `admin` section，加入 `reports: true`
+- [x] 5.1 修改 `web/default/src/hooks/use-sidebar-data.ts`，在 `admin.navGroups[0].items` 末尾追加 `{ title: t('Reports'), url: '/admin/reports', icon: BarChart3, requiredRole: ROLE.ADMIN }`
+- [x] 5.2 修改 `use-sidebar-config.ts` 的 `URL_TO_CONFIG_MAP`，添加 `/admin/reports` → `{ section: 'admin', module: 'reports' }`
+- [x] 5.3 修改 `DEFAULT_SIDEBAR_MODULES` 的 `admin` section，加入 `reports: true`
 - [ ] 5.4 添加路由守卫：`/admin/reports` 路径仅 role ≥ ADMIN 可访问，否则重定向到 `/dashboard/overview`
 
 ## 6. i18n 与 classic 主题
 
-- [ ] 6.1 在 `web/default/src/i18n/locales/{en,zh,fr,ru,ja,vi}.json` 添加新 key：`Reports` / `Input Tokens` / `Cache Hit Tokens` / `Output Tokens` / `Total Tokens` / `Time Range` / `Channels` / `Users` / `Today` / `Last 7 days` / `Last 30 days` / `Custom range` 等
+- [x] 6.1 在 `web/default/src/i18n/locales/{en,zh}.json` 添加新 key：`Reports` / `Input Tokens` / `Cache Hit` / `Output Tokens` / `Time Range` / `Top Channels` / `Top Users` 等
 - [ ] 6.2 classic 主题 `use-sidebar-data` 同步添加 Reports 入口（i18n key 复用），URL 指向 default 主题
 - [ ] 6.3 classic i18n locales (`en/zh-CN/zh-TW`) 添加 Reports key
 

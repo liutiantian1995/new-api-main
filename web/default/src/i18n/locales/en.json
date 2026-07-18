@@ -12,7 +12,7 @@
     "Enable user rolling quota": "Enable user rolling quota",
     "First tier to be exceeded triggers 429. Durations must be unique.": "First tier to be exceeded triggers 429. Durations must be unique.",
     "Group-based rolling quotas": "Group-based rolling quotas",
-    "No custom tiers \u2014 falling back to group default.": "No custom tiers \u2014 falling back to group default.",
+    "No custom tiers — falling back to group default.": "No custom tiers — falling back to group default.",
     "No rolling window quotas configured. Click \"Add group\" to get started.": "No rolling window quotas configured. Click \"Add group\" to get started.",
     "Rolling Window Tiers (max 5)": "Rolling Window Tiers (max 5)",
     "Rolling quota": "Rolling quota",
@@ -1968,7 +1968,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Related Projects",
     "footer.defaultCopyright": "All rights reserved.",
-    "footer.new\u0061pi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
+    "footer.newapi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment",
     "For private deployments, format: https://fastgpt.run/api/openapi": "For private deployments, format: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Force a syntactically valid JSON response",
@@ -4997,6 +4997,15 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Reports": "Reports",
+    "Cache Hit": "Cache Hit",
+    "Prompt tokens": "Prompt tokens",
+    "Cached prompt tokens": "Cached prompt tokens",
+    "Completion tokens": "Completion tokens",
+    "Time Range": "Time Range",
+    "Top Channels": "Top Channels",
+    "Total Tokens (Input + Output)": "Total Tokens (Input + Output)",
+    "View Reports": "View Reports"
   }
 }
