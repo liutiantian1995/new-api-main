@@ -46,3 +46,22 @@ func TestExtractCacheTokens_NumericAsString(t *testing.T) {
 	j := `{"usage":{"cache_read_input_tokens":"100"}}`
 	assert.Equal(t, 0, extractCacheTokens(j))
 }
+
+func TestExtractCacheTokens_TopLevelNewAPIFormat(t *testing.T) {
+	// new-api 自身写入路径：service/log_info_generate.go:GenerateTextOtherInfo
+	// other["cache_tokens"] 直接放在顶层，不嵌套在 usage 子对象下。
+	j := `{"cache_tokens":300,"cache_ratio":0.5,"model_ratio":0.1,"group_ratio":1.0}`
+	assert.Equal(t, 300, extractCacheTokens(j))
+}
+
+func TestExtractCacheTokens_TopLevelZeroIgnored(t *testing.T) {
+	// 顶层 cache_tokens=0 时应被 float64 解析跳过（类型断言成功但值为 0，贡献 0）
+	j := `{"cache_tokens":0,"cache_ratio":0}`
+	assert.Equal(t, 0, extractCacheTokens(j))
+}
+
+func TestExtractCacheTokens_TopLevelMissingOtherFieldsPresent(t *testing.T) {
+	// other 字段存在但无 cache_tokens 顶层键，也无 usage 嵌套，应返回 0
+	j := `{"model_ratio":0.1,"frt":1234.5,"admin_info":{"use_channel":["ch1"]}}`
+	assert.Equal(t, 0, extractCacheTokens(j))
+}

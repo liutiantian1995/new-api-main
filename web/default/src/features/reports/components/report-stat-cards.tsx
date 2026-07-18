@@ -2,7 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ArrowDownToLine, ArrowUpFromLine, Hash, Layers } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { formatNumber } from '@/lib/format'
+import { formatNumber, formatTokens } from '@/lib/format'
 
 import type { ReportStat } from '../types'
 
@@ -52,7 +52,7 @@ export function ReportStatCards({ stat, loading }: Props) {
                 className='truncate font-mono text-xl font-bold tracking-tight tabular-nums'
                 title={formatNumber(values[item.key])}
               >
-                {loading ? '—' : formatNumber(values[item.key])}
+                {loading ? '—' : formatTokens(values[item.key])}
               </div>
             </CardContent>
           </Card>

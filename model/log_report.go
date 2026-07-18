@@ -260,7 +260,13 @@ func populateTopCachedTokensUser(rows *[]TopUserRow, startTimestamp, endTimestam
 }
 
 // extractCacheTokens parses one log's `other` JSON field and returns the
-// detected cache tokens (sum across OpenAI-format and Claude-format fields).
+// detected cache tokens. Supports three sources, summed:
+//   - new-api top-level: other["cache_tokens"] (written by
+//     service.GenerateTextOtherInfo, the dominant path in this codebase)
+//   - OpenAI nested: other["usage"]["prompt_tokens_details"]["cached_tokens"]
+//   - Claude nested: other["usage"]["cache_read_input_tokens"] +
+//     other["usage"]["cache_creation_input_tokens"]
+//
 // Returns 0 on parse failure or missing fields.
 func extractCacheTokens(otherJSON string) int {
 	if otherJSON == "" {
@@ -270,23 +276,26 @@ func extractCacheTokens(otherJSON string) int {
 	if err := common.Unmarshal([]byte(otherJSON), &raw); err != nil {
 		return 0
 	}
-	usage, ok := raw["usage"].(map[string]any)
-	if !ok {
-		return 0
-	}
 	sum := 0
-	// OpenAI: usage.prompt_tokens_details.cached_tokens
-	if details, ok := usage["prompt_tokens_details"].(map[string]any); ok {
-		if v, ok := details["cached_tokens"].(float64); ok {
+	// new-api 自身写入路径：顶层 cache_tokens（最常见）
+	if v, ok := raw["cache_tokens"].(float64); ok {
+		sum += int(v)
+	}
+	// 兼容路径：当上游 usage 块被完整透传到 other 时
+	if usage, ok := raw["usage"].(map[string]any); ok {
+		// OpenAI: usage.prompt_tokens_details.cached_tokens
+		if details, ok := usage["prompt_tokens_details"].(map[string]any); ok {
+			if v, ok := details["cached_tokens"].(float64); ok {
+				sum += int(v)
+			}
+		}
+		// Claude: usage.cache_read_input_tokens + cache_creation_input_tokens
+		if v, ok := usage["cache_read_input_tokens"].(float64); ok {
 			sum += int(v)
 		}
-	}
-	// Claude: usage.cache_read_input_tokens + cache_creation_input_tokens
-	if v, ok := usage["cache_read_input_tokens"].(float64); ok {
-		sum += int(v)
-	}
-	if v, ok := usage["cache_creation_input_tokens"].(float64); ok {
-		sum += int(v)
+		if v, ok := usage["cache_creation_input_tokens"].(float64); ok {
+			sum += int(v)
+		}
 	}
 	return sum
 }

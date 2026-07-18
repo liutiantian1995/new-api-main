@@ -32,7 +32,12 @@ import type {
   DashboardFilters,
 } from '@/features/dashboard/types'
 import { api } from '@/lib/api'
-import { formatCompactNumber, formatNumber, formatQuota } from '@/lib/format'
+import {
+  formatCompactNumber,
+  formatNumber,
+  formatQuota,
+  formatTokens,
+} from '@/lib/format'
 import { computeTimeRange } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
@@ -43,6 +48,16 @@ interface LogStatCardsProps {
 }
 
 const MAX_INLINE_STAT_CHARS = 9
+
+// Token 类字段统一使用 K/M 紧凑格式，与 Reports 页面保持一致。
+// 非 token 字段（请求数 / RPM / 配额）保留原有自适应格式。
+const TOKEN_STAT_KEYS = new Set([
+  'inputTokens',
+  'cachedTokens',
+  'outputTokens',
+  'tokens',
+  'avgTpm',
+])
 
 interface LogStat {
   quota: number
@@ -163,7 +178,12 @@ export function LogStatCards(props: LogStatCardsProps) {
             displayValue: formatQuota(rawValue),
             fullValue: formatQuota(rawValue),
           }
-        : formatStatNumber(rawValue, locale)
+        : TOKEN_STAT_KEYS.has(config.key)
+          ? {
+              displayValue: formatTokens(rawValue),
+              fullValue: formatNumber(rawValue, locale),
+            }
+          : formatStatNumber(rawValue, locale)
 
     return {
       title: config.title,
