@@ -90,6 +90,7 @@ import {
   transformUserToFormDefaults,
 } from '../lib'
 import { type User } from '../types'
+import { RollingRateLimitField } from './rolling-rate-limit-field'
 import { UserQuotaDialog } from './user-quota-dialog'
 import { useUsers } from './users-provider'
 
@@ -445,6 +446,18 @@ export function UsersMutateDrawer({
                         </FormControl>
                         <FormMessage />
                       </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name='rolling_rate_limit'
+                    render={({ field }) => (
+                      <RollingRateLimitField
+                        value={field.value || ''}
+                        onChange={field.onChange}
+                        groupName={form.watch('group') || 'default'}
+                      />
                     )}
                   />
                 </SideDrawerSection>
