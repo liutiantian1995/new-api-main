@@ -3826,6 +3826,12 @@
     "并确认自行承担部署": "confirm that I bear legal responsibility arising from deployment",
     "运营和收费行为产生的法律责任": "operation and charging behavior",
     "，": ", ",
-    "、": ", "
+    "、": ", ",
+    "用户滚动配额": "User Rolling Quota",
+    "启用用户滚动配额": "Enable user rolling quota",
+    "用户滚动配额分组配置": "User rolling quota group config",
+    "补充分钟级速率限制：控制长期请求配额（5h/1d/1w）。": "Complements the minute-rate limiter: this controls long-term request quotas (5h/1d/1w).",
+    "滚动配额 JSON 格式": "Rolling quota JSON format",
+    "保存用户滚动配额": "Save user rolling quota"
   }
 }

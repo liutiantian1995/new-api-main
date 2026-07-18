@@ -34,6 +34,7 @@ import {
   CreditCard,
   Server,
   Activity,
+  Hourglass,
 } from 'lucide-react';
 
 import SystemSetting from '../../components/settings/SystemSetting';
@@ -41,6 +42,7 @@ import { isRoot } from '../../helpers';
 import OtherSetting from '../../components/settings/OtherSetting';
 import OperationSetting from '../../components/settings/OperationSetting';
 import RateLimitSetting from '../../components/settings/RateLimitSetting';
+import RollingRateLimitRollingQuota from './RollingRateLimit/SettingsRollingRateLimit';
 import ModelSetting from '../../components/settings/ModelSetting';
 import DashboardSetting from '../../components/settings/DashboardSetting';
 import RatioSetting from '../../components/settings/RatioSetting';
@@ -127,6 +129,16 @@ const Setting = () => {
       ),
       content: <RateLimitSetting />,
       itemKey: 'ratelimit',
+    });
+    panes.push({
+      tab: (
+        <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+          <Hourglass size={18} />
+          {t('用户滚动配额')}
+        </span>
+      ),
+      content: <RollingRateLimitRollingQuota />,
+      itemKey: 'rollingRateLimit',
     });
     panes.push({
       tab: (
