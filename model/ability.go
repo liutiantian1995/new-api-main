@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -105,13 +106,21 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 	return channelQuery, nil
 }
 
-func GetChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+// GetChannel selects a channel directly from the database (used when memory cache is disabled).
+// Since v1.0.0-rc.15-batch4, the DB path also honors token-aware routing:
+//   - estTokens > 0 时先按 max_tokens 软过滤候选渠道
+//   - 全部被过滤则回退到原始全集合，fallback 返回 true
+//   - 再按 effective_priority (base + Σ tier boost) 分 tier，retry 索引选择 tier
+//   - 同 tier 内沿用 weight 加权随机
+//
+// 与内存缓存路径 (GetRandomSatisfiedChannel) 行为对齐，避免 DB 模式下 token 路由失效。
+func GetChannel(group string, model string, retry int, requestPath string, estTokens int) (*Channel, bool, error) {
 	var abilities []Ability
 
 	var err error = nil
 	channelQuery, err := getChannelQuery(group, model, retry)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) || common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		err = channelQuery.Order("weight DESC").Find(&abilities).Error
@@ -119,31 +128,147 @@ func GetChannel(group string, model string, retry int, requestPath string) (*Cha
 		err = channelQuery.Order("weight DESC").Find(&abilities).Error
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	abilities = filterAbilitiesByRequestPath(abilities, requestPath)
-	channel := Channel{}
-	if len(abilities) > 0 {
-		// Randomly choose one
-		weightSum := uint(0)
-		for _, ability_ := range abilities {
-			weightSum += ability_.Weight + 10
-		}
-		// Randomly choose one
-		weight := common.GetRandomInt(int(weightSum))
-		for _, ability_ := range abilities {
-			weight -= int(ability_.Weight) + 10
-			//log.Printf("weight: %d, ability weight: %d", weight, *ability_.Weight)
-			if weight <= 0 {
-				channel.Id = ability_.ChannelId
-				break
-			}
-		}
-	} else {
-		return nil, nil
+	if len(abilities) == 0 {
+		return nil, false, nil
 	}
-	err = DB.First(&channel, "id = ?", channel.Id).Error
-	return &channel, err
+
+	// 收集候选 channel id 并按 max_tokens 软过滤
+	candidateIds := make([]int, 0, len(abilities))
+	for _, a := range abilities {
+		candidateIds = append(candidateIds, a.ChannelId)
+	}
+
+	// 加载候选 Channel 行（含 MaxTokens / TokenTiers 字段，供 effective_priority 计算）
+	channelsById, err := loadChannelsByIds(candidateIds)
+	if err != nil {
+		return nil, false, err
+	}
+
+	filteredIds, fallback := filterChannelsByMaxTokensFromMap(candidateIds, channelsById, estTokens)
+	if fallback {
+		// 全部被 max_tokens 软过滤 → 回退到原始全集合
+		filteredIds = candidateIds
+	}
+
+	// effective_priority 分 tier
+	uniqueEffectivePriorities := make(map[int64]bool)
+	for _, id := range filteredIds {
+		ch, ok := channelsById[id]
+		if !ok {
+			return nil, false, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", id)
+		}
+		uniqueEffectivePriorities[computeEffectivePriority(ch, estTokens)] = true
+	}
+	sortedUniquePriorities := make([]int64, 0, len(uniqueEffectivePriorities))
+	for p := range uniqueEffectivePriorities {
+		sortedUniquePriorities = append(sortedUniquePriorities, p)
+	}
+	sort.Slice(sortedUniquePriorities, func(i, j int) bool { return sortedUniquePriorities[i] > sortedUniquePriorities[j] })
+
+	retryIdx := retry
+	if retryIdx >= len(sortedUniquePriorities) {
+		retryIdx = len(sortedUniquePriorities) - 1
+	}
+	targetPriority := sortedUniquePriorities[retryIdx]
+
+	// 同 effective tier 内 weight 加权随机
+	// 对齐内存缓存路径 (GetRandomSatisfiedChannel) 的 smoothing 逻辑：
+	//   - weight 全 0 时均匀分布（每个渠道有效权重 100），避免返回 nil 造成 503
+	//   - 平均 weight < 10 时放大 smoothingFactor，保证加权随机的分辨率
+	sumWeight := 0
+	targetIds := make([]int, 0, len(filteredIds))
+	for _, id := range filteredIds {
+		ch, ok := channelsById[id]
+		if !ok {
+			continue
+		}
+		if computeEffectivePriority(ch, estTokens) == targetPriority {
+			sumWeight += ch.GetWeight()
+			targetIds = append(targetIds, id)
+		}
+	}
+	if len(targetIds) == 0 {
+		return nil, fallback, nil
+	}
+
+	smoothingFactor := 1
+	smoothingAdjustment := 0
+	if sumWeight == 0 {
+		sumWeight = len(targetIds) * 100
+		smoothingAdjustment = 100
+	} else if sumWeight/len(targetIds) < 10 {
+		smoothingFactor = 100
+	}
+
+	totalWeight := sumWeight * smoothingFactor
+	weight := common.GetRandomInt(totalWeight)
+	var selectedId int
+	for _, id := range targetIds {
+		ch, ok := channelsById[id]
+		if !ok {
+			continue
+		}
+		weight -= ch.GetWeight()*smoothingFactor + smoothingAdjustment
+		if weight < 0 {
+			selectedId = id
+			break
+		}
+	}
+	if selectedId == 0 && len(targetIds) > 0 {
+		selectedId = targetIds[0]
+	}
+
+	ch, ok := channelsById[selectedId]
+	if !ok {
+		return nil, fallback, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", selectedId)
+	}
+	return ch, fallback, nil
+}
+
+// loadChannelsByIds 批量加载候选 Channel 行（含 MaxTokens / TokenTiers），返回 id -> *Channel map。
+// 找不到的 id 不放入 map，由调用方当作一致性错误处理。
+func loadChannelsByIds(ids []int) (map[int]*Channel, error) {
+	if len(ids) == 0 {
+		return make(map[int]*Channel), nil
+	}
+	var channels []*Channel
+	err := DB.Where("id IN ?", ids).Find(&channels).Error
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[int]*Channel, len(channels))
+	for _, ch := range channels {
+		m[ch.Id] = ch
+	}
+	return m, nil
+}
+
+// filterChannelsByMaxTokensFromMap 是 filterChannelsByMaxTokens 的 DB 路径版本，
+// 直接基于已加载的 channelsById map 进行软过滤，避免依赖全局 channelsIDM（仅内存缓存路径可用）。
+func filterChannelsByMaxTokensFromMap(ids []int, channelsById map[int]*Channel, estTokens int) (filtered []int, fallback bool) {
+	if estTokens <= 0 || len(ids) == 0 {
+		return ids, false
+	}
+	filtered = make([]int, 0, len(ids))
+	for _, id := range ids {
+		ch, ok := channelsById[id]
+		if !ok {
+			// 保留未知 id，让下游发出一致性错误，行为与内存缓存路径一致
+			filtered = append(filtered, id)
+			continue
+		}
+		if ch.MaxTokens > 0 && estTokens > ch.MaxTokens {
+			continue
+		}
+		filtered = append(filtered, id)
+	}
+	if len(filtered) == 0 {
+		return ids, true
+	}
+	return filtered, false
 }
 
 // filterAbilitiesByRequestPath restricts candidates by request path for the DB

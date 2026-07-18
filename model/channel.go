@@ -55,8 +55,18 @@ type Channel struct {
 
 	OtherSettings string `json:"settings" gorm:"column:settings"` // 其他设置，存储azure版本等不需要检索的信息，详见dto.ChannelOtherSettings
 
+	// token 路由策略：max_tokens=0 表示不限；token_tiers 按命中累加 boost 到 effective_priority
+	MaxTokens  int         `json:"max_tokens" gorm:"default:0"`
+	TokenTiers []TokenTier `json:"token_tiers" gorm:"serializer:json;type:text"`
+
 	// cache info
 	Keys []string `json:"-" gorm:"-"`
+}
+
+// TokenTier 表示一条 token 分档：当请求估算 token 数 ≤ MaxTokens 时，PriorityBoost 叠加到该渠道的 effective_priority。
+type TokenTier struct {
+	MaxTokens     int   `json:"max_tokens"`
+	PriorityBoost int64 `json:"priority_boost"`
 }
 
 type ChannelInfo struct {
@@ -564,6 +574,12 @@ func (channel *Channel) Update() error {
 	}
 	var err error
 	err = DB.Model(channel).Updates(channel).Error
+	if err != nil {
+		return err
+	}
+	// GORM Updates(struct) skips zero-value fields; max_tokens=0 and empty
+	// token_tiers are valid configurations and must be persisted explicitly.
+	err = DB.Model(channel).Select("max_tokens", "token_tiers").Updates(channel).Error
 	if err != nil {
 		return err
 	}

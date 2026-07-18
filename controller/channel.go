@@ -520,6 +520,23 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		}
 	}
 
+	// token-aware routing 校验：max_tokens 必须 ≥0；token_tiers 数量上限 10 防止 CPU 放大；
+	// 每个 tier max_tokens 必须 >0；priority_boost 限制在 [-100, 100] 防止极端值导致 effective_priority 失衡。
+	if channel.MaxTokens < 0 {
+		return fmt.Errorf("max_tokens 必须 ≥ 0（0 表示不限）")
+	}
+	if len(channel.TokenTiers) > 10 {
+		return fmt.Errorf("token_tiers 数量上限为 10")
+	}
+	for i, tier := range channel.TokenTiers {
+		if tier.MaxTokens <= 0 {
+			return fmt.Errorf("token_tiers[%d].max_tokens 必须 > 0", i)
+		}
+		if tier.PriorityBoost < -100 || tier.PriorityBoost > 100 {
+			return fmt.Errorf("token_tiers[%d].priority_boost 必须在 [-100, 100] 之间", i)
+		}
+	}
+
 	return nil
 }
 

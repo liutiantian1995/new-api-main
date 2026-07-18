@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/types"
 
@@ -125,6 +127,11 @@ func formatUserLogs(logs []*Log, startIdx int) {
 			delete(otherMap, "audit_info")
 			// delete(otherMap, "reject_reason")
 			delete(otherMap, "stream_status")
+			// Hide model redirect mapping from non-admin users; admins still see it via GetAllLogs.
+			delete(otherMap, "is_model_mapped")
+			delete(otherMap, "upstream_model_name")
+			// Hide routing decision basis from non-admin users; admins still see it via GetAllLogs.
+			delete(otherMap, "routing_info")
 		}
 		logs[i].Other = common.MapToJsonStr(otherMap)
 	}
@@ -349,6 +356,15 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
 	createdAt := common.GetTimestamp()
+	// 从 context 读取路由决策依据，写入 Other.routing_info（仅管理员可见，formatUserLogs 会为非管理员剥离）
+	if val, exists := common.GetContextKey(c, constant.ContextKeyRoutingBasis); exists {
+		if routingInfo, ok := val.(*dto.RoutingInfo); ok && routingInfo != nil {
+			if params.Other == nil {
+				params.Other = make(map[string]interface{})
+			}
+			params.Other["routing_info"] = routingInfo
+		}
+	}
 	otherStr := common.MapToJsonStr(params.Other)
 	// 判断是否需要记录 IP
 	needRecordIp := false

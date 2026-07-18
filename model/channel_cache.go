@@ -23,6 +23,62 @@ var channelsIDM map[int]*Channel                     // all channels include dis
 var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
 var channelSyncLock sync.RWMutex
 
+// filterChannelsByMaxTokens applies the soft max_tokens filter.
+// Returns the filtered slice and a fallback flag. When estTokens > 0 and the
+// filter removes every candidate, fallback is true and the original slice is
+// returned so the caller can fall back to the full set. Channels with
+// MaxTokens == 0 (unconfigured) always pass.
+func filterChannelsByMaxTokens(channelIds []int, estTokens int) (filtered []int, fallback bool) {
+	if estTokens <= 0 || len(channelIds) == 0 {
+		return channelIds, false
+	}
+	filtered = make([]int, 0, len(channelIds))
+	for _, id := range channelIds {
+		ch, ok := channelsIDM[id]
+		if !ok {
+			// keep unknown ids so downstream emits the same consistency error as before
+			filtered = append(filtered, id)
+			continue
+		}
+		if ch.MaxTokens > 0 && estTokens > ch.MaxTokens {
+			continue
+		}
+		filtered = append(filtered, id)
+	}
+	if len(filtered) == 0 {
+		return channelIds, true
+	}
+	return filtered, false
+}
+
+// computeEffectivePriority returns base priority plus the sum of priority boosts
+// from token tiers whose max_tokens >= estTokens. estTokens <= 0 means no boost.
+func computeEffectivePriority(ch *Channel, estTokens int) int64 {
+	p, _ := computeEffectivePriorityWithTier(ch, estTokens)
+	return p
+}
+
+// computeEffectivePriorityWithTier 返回 effective priority 和命中的最大 tier
+// （max_tokens 最大的那档）。未命中任何 tier 时返回 (base, nil)。
+func computeEffectivePriorityWithTier(ch *Channel, estTokens int) (int64, *TokenTier) {
+	base := ch.GetPriority()
+	if estTokens <= 0 || len(ch.TokenTiers) == 0 {
+		return base, nil
+	}
+	var boost int64
+	var topTier *TokenTier
+	for i := range ch.TokenTiers {
+		tier := &ch.TokenTiers[i]
+		if tier.MaxTokens > 0 && estTokens <= tier.MaxTokens {
+			boost += tier.PriorityBoost
+			if topTier == nil || tier.MaxTokens > topTier.MaxTokens {
+				topTier = tier
+			}
+		}
+	}
+	return base + boost, topTier
+}
+
 func InitChannelCache() {
 	if !common.MemoryCacheEnabled {
 		return
@@ -105,10 +161,15 @@ func SyncChannelCache(frequency int) {
 	}
 }
 
-func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+// GetRandomSatisfiedChannel selects a channel for the given group/model/retry.
+// The returned bool is true when max_tokens soft-filtering removed every
+// candidate and the selection fell back to the full set; callers (distributor)
+// use it to set the X-Token-Routing-Fallback response header.
+func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string, estTokens int) (channel *Channel, fallback bool, err error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry, requestPath)
+		ch, fb, dbErr := GetChannel(group, model, retry, requestPath, estTokens)
+		return ch, fb, dbErr
 	}
 
 	channelSyncLock.RLock()
@@ -124,51 +185,62 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	}
 
 	if len(channels) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 
 	if len(channels) == 1 {
-		if channel, ok := channelsIDM[channels[0]]; ok {
-			return channel, nil
+		if ch, ok := channelsIDM[channels[0]]; ok {
+			return ch, false, nil
 		}
-		return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channels[0])
+		return nil, false, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channels[0])
 	}
 
-	uniquePriorities := make(map[int]bool)
+	// token-aware routing：先按 max_tokens 软过滤，再按 effective_priority 分 tier。
+	// 当 estTokens > 0 且过滤掉全部候选时，回退到原始全集合（让上游自身容量策略处理）。
+	filtered, fallback := filterChannelsByMaxTokens(channels, estTokens)
+	if fallback {
+		// 全部被 max_tokens 软过滤掉 → 回退到原始全集合，并把 fallback 信号返回给调用方。
+	} else {
+		channels = filtered
+	}
+
+	// effective_priority = base_priority + Σ(token_tier.priority_boost where estTokens ≤ tier.max_tokens)
+	// 同 base 的渠道可能因 boost 不同而落到不同 effective tier。
+	uniqueEffectivePriorities := make(map[int64]bool)
 	for _, channelId := range channels {
-		if channel, ok := channelsIDM[channelId]; ok {
-			uniquePriorities[int(channel.GetPriority())] = true
-		} else {
-			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+		ch, ok := channelsIDM[channelId]
+		if !ok {
+			return nil, false, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
 		}
+		uniqueEffectivePriorities[computeEffectivePriority(ch, estTokens)] = true
 	}
-	var sortedUniquePriorities []int
-	for priority := range uniquePriorities {
-		sortedUniquePriorities = append(sortedUniquePriorities, priority)
+	var sortedUniquePriorities []int64
+	for p := range uniqueEffectivePriorities {
+		sortedUniquePriorities = append(sortedUniquePriorities, p)
 	}
-	sort.Sort(sort.Reverse(sort.IntSlice(sortedUniquePriorities)))
+	sort.Slice(sortedUniquePriorities, func(i, j int) bool { return sortedUniquePriorities[i] > sortedUniquePriorities[j] })
 
-	if retry >= len(uniquePriorities) {
-		retry = len(uniquePriorities) - 1
+	if retry >= len(sortedUniquePriorities) {
+		retry = len(sortedUniquePriorities) - 1
 	}
-	targetPriority := int64(sortedUniquePriorities[retry])
+	targetPriority := sortedUniquePriorities[retry]
 
 	// get the priority for the given retry number
 	var sumWeight = 0
 	var targetChannels []*Channel
 	for _, channelId := range channels {
-		if channel, ok := channelsIDM[channelId]; ok {
-			if channel.GetPriority() == targetPriority {
-				sumWeight += channel.GetWeight()
-				targetChannels = append(targetChannels, channel)
+		if ch, ok := channelsIDM[channelId]; ok {
+			if computeEffectivePriority(ch, estTokens) == targetPriority {
+				sumWeight += ch.GetWeight()
+				targetChannels = append(targetChannels, ch)
 			}
 		} else {
-			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+			return nil, false, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
 		}
 	}
 
 	if len(targetChannels) == 0 {
-		return nil, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority))
+		return nil, false, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority))
 	}
 
 	// smoothing factor and adjustment
@@ -192,14 +264,17 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	randomWeight := rand.Intn(totalWeight)
 
 	// Find a channel based on its weight
-	for _, channel := range targetChannels {
-		randomWeight -= channel.GetWeight()*smoothingFactor + smoothingAdjustment
+	// 注意：fallback 变量由 filterChannelsByMaxTokens 设定后在此循环内不可变，
+	// 下面的 return 把该信号透传给调用方（distributor 据此设置响应头）。
+	// 任何后续重构都不得在此循环内重赋 fallback，否则会破坏 fallback 语义。
+	for _, ch := range targetChannels {
+		randomWeight -= ch.GetWeight()*smoothingFactor + smoothingAdjustment
 		if randomWeight < 0 {
-			return channel, nil
+			return ch, fallback, nil
 		}
 	}
 	// return null if no channel is not found
-	return nil, errors.New("channel not found")
+	return nil, fallback, errors.New("channel not found")
 }
 
 // filterChannelsByRequestPath restricts candidates by request path. Only Advanced

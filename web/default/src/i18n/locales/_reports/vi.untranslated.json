@@ -1,5 +1,11 @@
 {
   "Complements the minute-rate limiter: this controls long-term request quotas (5h / 1d / 1w).": "Complements the minute-rate limiter: this controls long-term request quotas (5h / 1d / 1w).",
+  "Create a default API token for each user with unlimited quota": "Create a default API token for each user with unlimited quota",
+  "Create multiple users at once with generated usernames and passwords": "Create multiple users at once with generated usernames and passwords",
   "First tier to be exceeded triggers 429. Durations must be unique.": "First tier to be exceeded triggers 429. Durations must be unique.",
-  "No rolling window quotas configured. Click \"Add group\" to get started.": "No rolling window quotas configured. Click \"Add group\" to get started."
+  "Leave empty to skip date in username": "Leave empty to skip date in username",
+  "Leave empty to use default group": "Leave empty to use default group",
+  "No rolling window quotas configured. Click \"Add group\" to get started.": "No rolling window quotas configured. Click \"Add group\" to get started.",
+  "On Use: subscription starts counting when user first logs in or uses a token": "On Use: subscription starts counting when user first logs in or uses a token",
+  "Optional: bind a subscription plan to each created user": "Optional: bind a subscription plan to each created user"
 }

@@ -38,6 +38,7 @@ export const useUsersData = () => {
 
   // Modal states
   const [showAddUser, setShowAddUser] = useState(false);
+  const [showBatchCreate, setShowBatchCreate] = useState(false);
   const [showEditUser, setShowEditUser] = useState(false);
   const [editingUser, setEditingUser] = useState({
     id: undefined,
@@ -257,6 +258,10 @@ export const useUsersData = () => {
     setShowAddUser(false);
   };
 
+  const closeBatchCreate = () => {
+    setShowBatchCreate(false);
+  };
+
   const closeEditUser = () => {
     setShowEditUser(false);
     setEditingUser({
@@ -286,9 +291,11 @@ export const useUsersData = () => {
 
     // Modal state
     showAddUser,
+    showBatchCreate,
     showEditUser,
     editingUser,
     setShowAddUser,
+    setShowBatchCreate,
     setShowEditUser,
     setEditingUser,
 
@@ -312,6 +319,7 @@ export const useUsersData = () => {
     handleRow,
     refresh,
     closeAddUser,
+    closeBatchCreate,
     closeEditUser,
     getFormValues,
 

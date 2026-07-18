@@ -92,6 +92,24 @@ export interface ChannelAffinityInfo {
   using_group?: string
 }
 
+/**
+ * Routing basis diagnostic (admin only); written by distributor into
+ * `other.routing_info`, describes which routing path selected this channel.
+ *
+ * basis: tier_boost | default | fallback | affinity
+ */
+export interface RoutingInfoData {
+  basis?: string
+  est_tokens?: number
+  base_priority?: number
+  effective_priority?: number
+  boost?: number
+  fallback?: boolean
+  // 命中的最大 token_tier（max_tokens 最大的那档）；仅 basis=tier_boost 时有值。
+  // 旧日志无此字段，前端用 `?? 0` 兜底。
+  tier_max_tokens?: number
+}
+
 export interface LogOtherData {
   admin_info?: {
     is_multi_key?: boolean
@@ -194,6 +212,9 @@ export interface LogOtherData {
   violation_fee_code?: string
   violation_fee_marker?: string
   fee_quota?: number
+  // Routing basis diagnostic (admin only); describes which routing path
+  // selected this channel: tier_boost / default / fallback / affinity.
+  routing_info?: RoutingInfoData
   // Reject / intercept reason (admin)
   reject_reason?: string
   // Task-related fields (for refund logs, type=6)

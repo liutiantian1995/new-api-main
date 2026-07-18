@@ -59,6 +59,14 @@ function renderStatusTag(sub, t) {
       </Tag>
     );
   }
+  // pending: 使用时生效策略下未激活的订阅（start_time=0, end_time=0）
+  if (status === 'pending') {
+    return (
+      <Tag color='orange' shape='circle' size='small'>
+        {t('未生效')}
+      </Tag>
+    );
+  }
   if (status === 'cancelled') {
     return (
       <Tag color='grey' shape='circle' size='small'>

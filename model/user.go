@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -53,7 +54,11 @@ type User struct {
 	StripeCustomer   string                     `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
 	CreatedAt        int64                      `json:"created_at" gorm:"autoCreateTime;column:created_at"`
 	LastLoginAt      int64                      `json:"last_login_at" gorm:"default:0;column:last_login_at"`
-	AdminPermissions map[string]map[string]bool `json:"admin_permissions,omitempty" gorm:"-:all"`
+
+	// SubscriptionStatuses 仅用于前端展示，存放当前用户所有订阅状态去重后的逗号拼接（如 "active,pending"）。
+	// 不持久化到数据库，由 controller 层批量填充。
+	SubscriptionStatuses string               `json:"subscription_statuses" gorm:"-:all"`
+	AdminPermissions     map[string]map[string]bool `json:"admin_permissions,omitempty" gorm:"-:all"`
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -322,6 +327,138 @@ func GetUserById(id int, selectAll bool) (*User, error) {
 		err = DB.Omit("password", "access_token").First(&user, "id = ?", id).Error
 	}
 	return &user, err
+}
+
+type BatchCreateUserRequest struct {
+	Prefix             string `json:"prefix" validate:"required,min=1,max=10"`
+	DateSuffix         string `json:"date_suffix"`
+	Count              int    `json:"count" validate:"required,min=1,max=200"`
+	Group              string `json:"group"`
+	Role               int    `json:"role" validate:"max=1"`
+	PlanId             int    `json:"plan_id"`
+	ActivationStrategy string `json:"activation_strategy"`
+	CreateToken        bool   `json:"create_token"`
+}
+
+// BatchCreateUsers creates multiple users in a single transaction.
+// Username format: {prefix}{date_suffix}{6-char-random} (random alphanumeric).
+// Auto-avoids conflicts with existing usernames and within the batch itself.
+// Password: {username}@123
+func BatchCreateUsers(req BatchCreateUserRequest) ([]User, error) {
+	const (
+		randomSuffixLen    = 6
+		maxUsernameLen     = 20
+		maxRetriesPerUser  = 10
+	)
+
+	// 1. 长度校验：Username 字段约束为 max=20
+	totalLen := len(req.Prefix) + len(req.DateSuffix) + randomSuffixLen
+	if totalLen > maxUsernameLen {
+		return nil, fmt.Errorf(
+			"用户名过长：前缀(%d)+日期(%d)+随机(%d)=%d 超过 %d 字符，请缩短前缀或日期后缀",
+			len(req.Prefix), len(req.DateSuffix), randomSuffixLen, totalLen, maxUsernameLen,
+		)
+	}
+
+	// 2. 查询 prefix+date_suffix 开头的已存在用户名，避免与历史批量冲突
+	namePrefix := req.Prefix + req.DateSuffix
+	var existing []string
+	if err := DB.Model(&User{}).Where("username LIKE ?", namePrefix+"%").
+		Pluck("username", &existing).Error; err != nil {
+		return nil, err
+	}
+	existingSet := make(map[string]bool, len(existing))
+	for _, n := range existing {
+		existingSet[n] = true
+	}
+
+	// 3. 生成 count 个唯一用户名：批量内 + 数据库去重
+	usernames := make([]string, 0, req.Count)
+	used := make(map[string]bool, req.Count)
+	for i := 0; i < req.Count; i++ {
+		var name string
+		ok := false
+		for retry := 0; retry < maxRetriesPerUser; retry++ {
+			candidate := namePrefix + common.GetRandomString(randomSuffixLen)
+			if !used[candidate] && !existingSet[candidate] {
+				name = candidate
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return nil, fmt.Errorf(
+				"无法生成唯一用户名（前缀=%s，已尝试 %d 次），请重试或更换前缀",
+				namePrefix, maxRetriesPerUser,
+			)
+		}
+		used[name] = true
+		usernames = append(usernames, name)
+	}
+
+	users := make([]User, 0, req.Count)
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		for _, username := range usernames {
+			hashedPwd, err := common.Password2Hash(username + "@123")
+			if err != nil {
+				return err
+			}
+			u := User{
+				Username:    username,
+				Password:    hashedPwd,
+				DisplayName: username,
+				Role:        req.Role,
+				Status:      common.UserStatusEnabled,
+				Group:       req.Group,
+				AffCode:     common.GetRandomString(4),
+			}
+			if req.Group == "" {
+				u.Group = "default"
+			}
+			if u.Role == 0 {
+				u.Role = common.RoleCommonUser
+			}
+			if err := tx.Create(&u).Error; err != nil {
+				return err
+			}
+
+			if req.PlanId > 0 {
+				_, err := CreateUserSubscriptionFromPlanTxWithStrategy(tx, u.Id, &SubscriptionPlan{Id: req.PlanId}, "batch", req.ActivationStrategy)
+				if err != nil {
+					return err
+				}
+			}
+
+			if req.CreateToken {
+				key, genErr := common.GenerateKey()
+				if genErr != nil {
+					return genErr
+				}
+				token := Token{
+					UserId:         u.Id,
+					Name:           username + "的初始令牌",
+					Key:            key,
+					CreatedTime:    common.GetTimestamp(),
+					AccessedTime:   common.GetTimestamp(),
+					ExpiredTime:    -1,
+					RemainQuota:    500000,
+					UnlimitedQuota: true,
+					Group:          "",
+				}
+				if setting.DefaultUseAutoGroup {
+					token.Group = "auto"
+				}
+				if err := tx.Create(&token).Error; err != nil {
+					return err
+				}
+			}
+
+			users = append(users, u)
+		}
+		return nil
+	})
+
+	return users, err
 }
 
 func GetUserIdByAffCode(affCode string) (int, error) {

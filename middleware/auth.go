@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -18,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -405,6 +407,34 @@ func TokenAuth() func(c *gin.Context) {
 		}
 
 		userCache.WriteContext(c)
+
+		// Activate pending on_use subscriptions on first token use (fire-and-forget).
+		// Uses a per-user Redis flag to avoid hammering the DB on every request.
+		ctx := context.Background()
+		if common.RedisEnabled {
+			flagKey := fmt.Sprintf("user:%d:subs_activated", token.UserId)
+			activated, _ := common.RDB.Exists(ctx, flagKey).Result()
+			if activated == 0 {
+				has, _ := model.HasPendingSubscriptions(token.UserId)
+				if has {
+					gopool.Go(func() {
+						if err := model.ActivatePendingSubscriptions(token.UserId); err != nil {
+							common.SysLog(fmt.Sprintf("failed to activate pending subscriptions for user %d: %s", token.UserId, err.Error()))
+							return
+						}
+						common.RDB.Set(ctx, flagKey, "1", 0)
+					})
+				} else {
+					gopool.Go(func() { common.RDB.Set(ctx, flagKey, "1", 0) })
+				}
+			}
+		} else {
+			gopool.Go(func() {
+				if err := model.ActivatePendingSubscriptions(token.UserId); err != nil {
+					common.SysLog(fmt.Sprintf("failed to activate pending subscriptions for user %d: %s", token.UserId, err.Error()))
+				}
+			})
+		}
 
 		userGroup := userCache.Group
 		tokenGroup := token.Group

@@ -64,6 +64,7 @@ import ParamOverrideEditorModal from './ParamOverrideEditorModal';
 import JSONEditor from '../../../common/ui/JSONEditor';
 import SecureVerificationModal from '../../../common/modals/SecureVerificationModal';
 import StatusCodeRiskGuardModal from './StatusCodeRiskGuardModal';
+import TokenRoutingPanel from './TokenRoutingPanel';
 import ChannelKeyDisplay from '../../../common/ui/ChannelKeyDisplay';
 import { useSecureVerification } from '../../../../hooks/common/useSecureVerification';
 import { parseChannelConnectionString } from '../../../../helpers/token';
@@ -185,6 +186,9 @@ const EditChannelModal = (props) => {
     groups: ['default'],
     priority: 0,
     weight: 0,
+    // token-aware routing 字段（默认不开启）
+    max_tokens: 0,
+    token_tiers: [],
     tag: '',
     multi_key_mode: 'random',
     // 渠道额外设置的默认值
@@ -973,6 +977,13 @@ const EditChannelModal = (props) => {
       }
 
       initialBaseUrlRef.current = data.base_url || '';
+      // token-aware routing 字段兼容：旧渠道无配置时填默认值，避免后续读写 undefined
+      if (typeof data.max_tokens !== 'number') {
+        data.max_tokens = 0;
+      }
+      if (!Array.isArray(data.token_tiers)) {
+        data.token_tiers = [];
+      }
       setInputs(data);
       if (formApiRef.current) {
         formApiRef.current.setValues(data);
@@ -1538,6 +1549,9 @@ const EditChannelModal = (props) => {
     const formValues = formApiRef.current ? formApiRef.current.getValues() : {};
     let localInputs = { ...formValues };
     localInputs.param_override = inputs.param_override;
+    // token-aware routing：这两个字段不在 Semi Form field 体系内，由 TokenRoutingPanel 直接维护在 inputs state
+    localInputs.max_tokens = inputs.max_tokens ?? 0;
+    localInputs.token_tiers = Array.isArray(inputs.token_tiers) ? inputs.token_tiers : [];
 
     if (localInputs.type === 57) {
       if (batch) {
@@ -2501,6 +2515,16 @@ const EditChannelModal = (props) => {
                     </>
                   )}
                 </div>
+
+                {/* Token Routing Strategy Section */}
+                <TokenRoutingPanel
+                  maxTokens={inputs.max_tokens ?? 0}
+                  tokenTiers={inputs.token_tiers ?? []}
+                  onChange={({ maxTokens, tokenTiers }) => {
+                    handleInputChange('max_tokens', maxTokens);
+                    handleInputChange('token_tiers', tokenTiers);
+                  }}
+                />
 
                 {/* Extra Settings Section */}
                 <div className='pt-3'>

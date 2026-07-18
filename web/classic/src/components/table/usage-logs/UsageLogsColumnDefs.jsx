@@ -35,7 +35,7 @@ import {
   renderModelPriceSimple,
   renderTieredModelPriceSimple,
 } from '../../../helpers';
-import { IconHelpCircle } from '@douyinfe/semi-icons';
+import { IconAlertTriangle, IconHelpCircle } from '@douyinfe/semi-icons';
 import { CircleAlert, Route, Sparkles } from 'lucide-react';
 
 const colors = [
@@ -141,6 +141,55 @@ function renderType(type, t) {
       );
   }
 }
+
+// Routing basis 元数据。和后端 dto/routing_info.go 的 4 种 basis 对齐，
+// 与 default 前端 web/default/src/features/usage-logs/lib/format.ts 中的
+// ROUTING_BASIS_LABEL_MAP / ROUTING_BASIS_DECISION_PATH 保持同构，改一处理想同步另一处。
+// 静态字段放模块级，避免每行 render 都重建。description / pathCond 是面向管理员的
+// 中文运营说明（与 default 端一致），不走 i18n；summary 通过 t() 插值（含 token 数）。
+const ROUTING_BASIS_META = {
+  tier_boost: {
+    color: 'green',
+    labelKey: '分档提权',
+    description:
+      '分档提权：请求估算 token 命中渠道配置的 token_tiers 分档，base priority 被加分提权后在加权随机中胜出。',
+    pathCond: 'estTokens 命中分档且 effective > base',
+    summaryKey: 'Routing basis summary · tier_boost',
+  },
+  default: {
+    color: 'grey',
+    labelKey: '默认',
+    description:
+      '默认：按 base priority 加权随机选出，没有任何 boost 生效。',
+    pathCond: '以上都没命中',
+    summaryKey: 'Routing basis summary · default',
+  },
+  fallback: {
+    color: 'red',
+    labelKey: '回退',
+    description:
+      '回退（异常）：估算 token 超过所有候选渠道的 max_tokens，建议调大候选渠道 max_tokens 或补足大容量渠道。',
+    pathCond: '所有候选 max_tokens < estTokens',
+    summaryKey: 'Routing basis summary · fallback',
+  },
+  affinity: {
+    color: 'green',
+    labelKey: '亲和',
+    description:
+      '亲和：由渠道亲和性规则或 auto 分组记忆产生，命中后直接复用上次渠道。',
+    pathCond: '命中渠道亲和',
+    summaryKey: 'Routing basis summary · affinity',
+  },
+};
+
+// 决策路径顺序：fallback > affinity > tier_boost > default（与后端 model/routing_basis.go 一致）。
+// label 在 render 时通过 t() 翻译，以响应语言切换。
+const ROUTING_BASIS_DECISION_PATH = [
+  { key: 'fallback', labelKey: '回退' },
+  { key: 'affinity', labelKey: '亲和' },
+  { key: 'tier_boost', labelKey: '分档提权' },
+  { key: 'default', labelKey: '默认' },
+];
 
 function buildStreamStatusTooltip(ss, t) {
   if (!ss) return null;
@@ -605,6 +654,163 @@ export const getLogsColumns = ({
           </div>
         ) : (
           <></>
+        );
+      },
+    },
+    {
+      key: COLUMN_KEYS.ROUTING_BASIS,
+      title: t('路由依据'),
+      dataIndex: 'routing_basis',
+      render: (text, record, index) => {
+        if (!isAdminUser) return <></>;
+        if (
+          record.type !== 0 &&
+          record.type !== 2 &&
+          record.type !== 5 &&
+          record.type !== 6
+        ) {
+          return <></>;
+        }
+        const other = getLogOther(record.other);
+        const info = other?.routing_info;
+        if (!info || !info.basis) {
+          return (
+            <Tag color='grey' size='small'>
+              {t('未记录')}
+            </Tag>
+          );
+        }
+
+        const meta = ROUTING_BASIS_META[info.basis] || {
+          color: 'grey',
+          labelKey: info.basis,
+          description: '',
+          pathCond: '',
+          summaryKey: '',
+        };
+        const isFallback = info.basis === 'fallback';
+
+        // 顶部一行人话摘要（i18n 插值）
+        let summaryText = '';
+        if (meta.summaryKey) {
+          summaryText = t(meta.summaryKey, {
+            est: Number(info.est_tokens ?? 0),
+            boost: Number(info.boost ?? 0),
+            base: Number(info.base_priority ?? 0),
+            effective: Number(info.effective_priority ?? 0),
+            tier_max: Number(info.tier_max_tokens ?? 0),
+          });
+        }
+
+        const detail = (
+          <div style={{ maxWidth: 280, lineHeight: 1.55 }}>
+            {/* 顶部：人话摘要 */}
+            {summaryText && (
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                {summaryText}
+              </div>
+            )}
+            {/* 中文说明 */}
+            {meta.description && (
+              <div style={{ color: 'var(--semi-color-text-2)', marginBottom: 8 }}>
+                {meta.description}
+              </div>
+            )}
+            {/* 决策路径示意 */}
+            <div
+              style={{
+                borderTop: '1px solid var(--semi-color-border)',
+                paddingTop: 6,
+                marginBottom: 8,
+              }}
+            >
+              <div style={{ color: 'var(--semi-color-text-2)', marginBottom: 4 }}>
+                {t('决策路径')}:
+              </div>
+              {ROUTING_BASIS_DECISION_PATH.map((step) => {
+                const active = step.key === info.basis;
+                const stepMeta = ROUTING_BASIS_META[step.key];
+                return (
+                  <div
+                    key={step.key}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: 6,
+                      padding: '2px 4px',
+                      borderRadius: 4,
+                      background: active
+                        ? 'var(--semi-color-primary-light-default)'
+                        : 'transparent',
+                      fontWeight: active ? 600 : 400,
+                      color: active
+                        ? 'var(--semi-color-text)'
+                        : 'var(--semi-color-text-2)',
+                    }}
+                  >
+                    <span style={{ flexShrink: 0 }}>
+                      {active ? '→ ' : ''}
+                      {t(step.labelKey)}
+                    </span>
+                    <span
+                      style={{
+                        color: 'var(--semi-color-text-2)',
+                        fontSize: 12,
+                      }}
+                    >
+                      {stepMeta?.pathCond}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            {/* 底部：原始数字字段 */}
+            <div
+              style={{
+                borderTop: '1px solid var(--semi-color-border)',
+                paddingTop: 6,
+              }}
+            >
+              <div>
+                {t('估算 Tokens')}: {info.est_tokens ?? 0}
+              </div>
+              <div>
+                {t('基础优先级')}: {info.base_priority ?? 0}
+              </div>
+              <div>
+                {t('生效优先级')}: {info.effective_priority ?? 0}
+              </div>
+              <div>
+                {t('提权')}: {info.boost ?? 0}
+              </div>
+              <div
+                style={
+                  isFallback
+                    ? {
+                        color: 'var(--semi-color-danger)',
+                        fontWeight: 600,
+                      }
+                    : undefined
+                }
+              >
+                {t('是否回退')}: {info.fallback ? t('是') : t('否')}
+              </div>
+            </div>
+          </div>
+        );
+        return (
+          <Tooltip content={detail} position='top'>
+            <Tag
+              color={meta.color}
+              size='small'
+              type={isFallback ? 'solid' : 'light'}
+              prefixIcon={isFallback ? (
+                <IconAlertTriangle style={{ color: 'var(--semi-color-danger)' }} />
+              ) : undefined}
+            >
+              {t(meta.labelKey)}
+            </Tag>
+          </Tooltip>
         );
       },
     },

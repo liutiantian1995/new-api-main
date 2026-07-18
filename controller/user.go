@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/QuantumNous/new-api/constant"
 
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -132,6 +134,12 @@ func recordLoginAudit(user *model.User, c *gin.Context) {
 // setup session & cookies and then return user info
 func setupLogin(user *model.User, c *gin.Context) {
 	model.UpdateUserLastLoginAt(user.Id)
+	// Activate pending on_use subscriptions on login (fire-and-forget, errors are logged only).
+	gopool.Go(func() {
+		if err := model.ActivatePendingSubscriptions(user.Id); err != nil {
+			common.SysLog(fmt.Sprintf("failed to activate pending subscriptions for user %d: %s", user.Id, err.Error()))
+		}
+	})
 	session := sessions.Default(c)
 	session.Set("id", user.Id)
 	session.Set("username", user.Username)
@@ -281,6 +289,9 @@ func GetAllUsers(c *gin.Context) {
 		return
 	}
 
+	// 批量填充订阅状态（仅在用户列表展示用，失败不阻断列表加载）
+	_ = fillSubscriptionStatuses(users)
+
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
 
@@ -310,10 +321,93 @@ func SearchUsers(c *gin.Context) {
 		return
 	}
 
+	// 批量填充订阅状态（仅在用户列表展示用，失败不阻断列表加载）
+	_ = fillSubscriptionStatuses(users)
+
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
 	common.ApiSuccess(c, pageInfo)
 	return
+}
+
+// fillSubscriptionStatuses 批量填充每个用户的 SubscriptionStatuses 字段（基于 active/pending 订阅，
+// active 复核 end_time 后过期转 expired）。失败仅返回 error，调用方可决定是否记录日志。
+func fillSubscriptionStatuses(users []*model.User) error {
+	if len(users) == 0 {
+		return nil
+	}
+	userIds := make([]int, 0, len(users))
+	for _, u := range users {
+		if u != nil {
+			userIds = append(userIds, u.Id)
+		}
+	}
+	statusMap, err := model.GetBatchUserSubscriptionStatuses(userIds)
+	if err != nil {
+		return err
+	}
+	for _, u := range users {
+		if u == nil {
+			continue
+		}
+		u.SubscriptionStatuses = statusMap[u.Id] // map miss 时为零值 ""，即无订阅
+	}
+	return nil
+}
+
+// ExportUsersTxt 导出当前搜索条件下的用户凭据为 TXT：每条记录一行
+// 「用户: xxx  密码: xxx  key: xxx」，字段间用空格分隔。
+// 上限 10000 条，避免一次拉取过多；写 UTF-8 BOM 让记事本/Excel 正确显示中文。
+func ExportUsersTxt(c *gin.Context) {
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	group := c.Query("group")
+
+	// 复用 SearchUsers，limit 10000 防止过大
+	const exportHardLimit = 10000
+	users, _, err := model.SearchUsers(keyword, group, nil, nil, 0, exportHardLimit)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	// 批量获取每个用户最早创建的 token key
+	userIds := make([]int, 0, len(users))
+	for _, u := range users {
+		if u != nil {
+			userIds = append(userIds, u.Id)
+		}
+	}
+	tokenKeys, _ := model.GetBatchFirstUserTokenKeys(userIds) // 失败不阻断导出，仅 key 字段留空
+
+	// TXT 响应头：含日期的文件名 + UTF-8 BOM（记事本/Excel 中文兼容）
+	filename := fmt.Sprintf("users-%s.txt", time.Now().Format("20060102"))
+	c.Header("Content-Type", "text/plain; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Writer.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
+
+	var b strings.Builder
+	for _, u := range users {
+		if u == nil {
+			continue
+		}
+		password := u.Username + "@123"
+		apiKey := tokenKeys[u.Id] // 无 token 时为零值 ""
+		// Token.Key 在 DB 中存裸 key（不带前缀），用户调用 API 时需以 sk- 开头
+		// 与前端展示约定保持一致（tokens/index.jsx、chat-links.ts 等均拼 sk- 前缀）
+		if apiKey != "" {
+			apiKey = "sk-" + apiKey
+		}
+		b.WriteString("用户: ")
+		b.WriteString(u.Username)
+		b.WriteString("  密码: ")
+		b.WriteString(password)
+		b.WriteString("  key: ")
+		b.WriteString(apiKey)
+		b.WriteString("\r\n")
+	}
+	if _, err := c.Writer.Write([]byte(b.String())); err != nil {
+		common.SysError("写入 TXT 失败: " + err.Error())
+	}
 }
 
 func canManageTargetRole(myRole int, targetRole int) bool {
@@ -1000,6 +1094,70 @@ type ManageRequest struct {
 	Action string `json:"action"`
 	Value  int    `json:"value"`
 	Mode   string `json:"mode"`
+}
+
+type BatchCreateUsersRequest struct {
+	Prefix             string `json:"prefix" binding:"required"`
+	DateSuffix         string `json:"date_suffix"`
+	Count              int    `json:"count" binding:"required,min=1,max=200"`
+	Group              string `json:"group"`
+	Role               int    `json:"role"`
+	PlanId             int    `json:"plan_id"`
+	ActivationStrategy string `json:"activation_strategy"`
+	CreateToken        bool   `json:"create_token"`
+}
+
+// BatchCreateUsers creates multiple users in a single transaction.
+// Username format: {prefix}{date_suffix}{seq}, password: {username}@123
+func BatchCreateUsers(c *gin.Context) {
+	var req BatchCreateUsersRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	req.Prefix = strings.TrimSpace(req.Prefix)
+	if req.Prefix == "" {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	if req.ActivationStrategy != "" &&
+		req.ActivationStrategy != model.SubscriptionActivationImmediate &&
+		req.ActivationStrategy != model.SubscriptionActivationOnUse {
+		common.ApiErrorMsg(c, "无效的生效策略")
+		return
+	}
+	myRole := c.GetInt("role")
+	if req.Role >= myRole {
+		req.Role = common.RoleCommonUser
+	}
+	modelReq := model.BatchCreateUserRequest{
+		Prefix:             req.Prefix,
+		DateSuffix:         req.DateSuffix,
+		Count:              req.Count,
+		Group:              req.Group,
+		Role:               req.Role,
+		PlanId:             req.PlanId,
+		ActivationStrategy: req.ActivationStrategy,
+		CreateToken:        req.CreateToken,
+	}
+	users, err := model.BatchCreateUsers(modelReq)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	recordManageAuditFor(c, 0, "user.batch_create", map[string]interface{}{
+		"count":               len(users),
+		"prefix":              req.Prefix,
+		"group":               req.Group,
+		"plan_id":             req.PlanId,
+		"activation_strategy": req.ActivationStrategy,
+	})
+	common.ApiSuccess(c, gin.H{
+		"count":   len(users),
+		"users":   users,
+		"message": "批量创建成功，初始密码为 用户名@123",
+	})
+	return
 }
 
 // ManageUser Only admin user can do this

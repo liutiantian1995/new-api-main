@@ -182,6 +182,7 @@ import {
   ChannelBasicSection,
   ChannelEditorLoadingState,
   ChannelModelsSection,
+  TokenRoutingSection,
 } from './sections'
 
 type ChannelMutateDrawerProps = {

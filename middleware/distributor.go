@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
@@ -37,6 +38,12 @@ func Distribute() func(c *gin.Context) {
 		if err != nil {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
+		}
+		// token-aware routing：估算输入 token 数。非文本路径（MJ/Suno/audio/images 等）
+		// 在 helper 内部直接返回 0，行为与未配置 max_tokens/token_tiers 时一致。
+		estTokens := estimateInputTokensForDistribute(c)
+		if estTokens > 0 {
+			common.SetContextKey(c, constant.ContextKeyEstimatedTokens, estTokens)
 		}
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
@@ -82,6 +89,8 @@ func Distribute() func(c *gin.Context) {
 					return
 				}
 				var selectGroup string
+				var fallback bool
+				affinityUsed := false
 				usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 				// check path is /pg/chat/completions
 				if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") {
@@ -106,7 +115,11 @@ func Distribute() func(c *gin.Context) {
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
 						channelSupportsRequestPath(preferred, c.Request.URL.Path) {
-						if usingGroup == "auto" {
+						// token-aware affinity 守卫：当 estTokens 超过 affinity 渠道的 max_tokens 时，
+						// 视为亲和失效，让流程进入 CacheGetRandomSatisfiedChannel 重选大容量渠道。
+						if estTokens > 0 && preferred.MaxTokens > 0 && estTokens > preferred.MaxTokens {
+							service.ClearCurrentChannelAffinityCache(c)
+						} else if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetUserAutoGroup(userGroup)
 							for _, g := range autoGroups {
@@ -115,6 +128,7 @@ func Distribute() func(c *gin.Context) {
 									common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
 									channel = preferred
 									affinityUsable = true
+									affinityUsed = true
 									service.MarkChannelAffinityUsed(c, g, preferred.Id)
 									break
 								}
@@ -123,6 +137,7 @@ func Distribute() func(c *gin.Context) {
 							channel = preferred
 							selectGroup = usingGroup
 							affinityUsable = true
+							affinityUsed = true
 							service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
 						}
 					}
@@ -132,12 +147,13 @@ func Distribute() func(c *gin.Context) {
 				}
 
 				if channel == nil {
-					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
+					channel, selectGroup, fallback, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
 						Ctx:         c,
 						ModelName:   modelRequest.Model,
 						TokenGroup:  usingGroup,
 						RequestPath: c.Request.URL.Path,
 						Retry:       common.GetPointer(0),
+						EstTokens:   estTokens,
 					})
 					if err != nil {
 						showGroup := usingGroup
@@ -157,6 +173,21 @@ func Distribute() func(c *gin.Context) {
 						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": modelRequest.Model}), types.ErrorCodeModelNotFound)
 						return
 					}
+					// token-aware routing 选渠道后：fallback=true 表示本次因 estTokens
+					// 超过所有候选 max_tokens 而走了全集合，用响应 header 让客户端感知。
+					if fallback {
+						c.Writer.Header().Set("X-Token-Routing-Fallback", "max-tokens-exceeded")
+					}
+				}
+				// debug 级别日志：estTokens、选中渠道，便于排障（需 DEBUG=true 才输出，避免高流量部署日志膨胀）
+				if estTokens > 0 && channel != nil {
+					logger.LogDebug(c, fmt.Sprintf("token-aware routing: model=%s estTokens=%d selected_channel_id=%d selected_channel_max_tokens=%d effective_priority=%d fallback=%v",
+						modelRequest.Model, estTokens, channel.Id, channel.MaxTokens, channel.GetPriority(), fallback))
+				}
+				// 计算路由决策依据存入 context，供 RecordConsumeLog 写入 Log.Other.routing_info（仅管理员可见）
+				if channel != nil {
+					routingInfo := model.ComputeRoutingBasis(channel, estTokens, affinityUsed, fallback)
+					common.SetContextKey(c, constant.ContextKeyRoutingBasis, routingInfo)
 				}
 			}
 		}
@@ -530,4 +561,64 @@ func extractModelNameFromGeminiPath(path string) string {
 
 	// 返回模型名部分
 	return path[startIndex : startIndex+colonIndex]
+}
+
+// pathSupportsTokenEstimation reports whether the request path carries a JSON
+// body whose input tokens can be approximated by service.EstimateInputTokens.
+// Non-text paths (MJ/Suno/video/audio/images/realtime/moderations) are excluded
+// because their bodies are multipart or have no useful text content.
+func pathSupportsTokenEstimation(path string) bool {
+	if strings.Contains(path, "/mj/") || strings.Contains(path, "/suno/") {
+		return false
+	}
+	if strings.HasPrefix(path, "/v1/videos") || strings.HasPrefix(path, "/v1/video/") {
+		return false
+	}
+	if strings.HasPrefix(path, "/v1/audio") {
+		return false
+	}
+	if strings.HasPrefix(path, "/v1/images/") {
+		return false
+	}
+	if strings.HasPrefix(path, "/v1/realtime") {
+		return false
+	}
+	// Text-capable paths: OpenAI chat/completions & completions, Anthropic
+	// /v1/messages, Gemini /v1beta/models/* and /v1/models/*, embeddings,
+	// playground chat, and OpenAI Responses API /v1/responses.
+	if strings.HasSuffix(path, "/chat/completions") || strings.HasSuffix(path, "/completions") {
+		return true
+	}
+	if strings.HasSuffix(path, "/messages") {
+		return true
+	}
+	if strings.HasSuffix(path, "/embeddings") {
+		return true
+	}
+	if strings.Contains(path, ":generateContent") || strings.Contains(path, ":streamGenerateContent") {
+		return true
+	}
+	if strings.HasSuffix(path, "/responses") {
+		return true
+	}
+	return false
+}
+
+// estimateInputTokensForDistribute reads the cached request body and returns an
+// approximate input token count for token-aware channel routing. Returns 0 when
+// the path is not estimatable or the body is empty/invalid. The body storage is
+// left seeked to 0 so downstream readers behave unchanged.
+func estimateInputTokensForDistribute(c *gin.Context) int {
+	if !pathSupportsTokenEstimation(c.Request.URL.Path) {
+		return 0
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return 0
+	}
+	body, err := storage.Bytes()
+	if err != nil || len(body) == 0 {
+		return 0
+	}
+	return service.EstimateInputTokens(body)
 }

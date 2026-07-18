@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { type ColumnDef } from '@tanstack/react-table'
-import { CircleAlert, GitBranch, Sparkles, KeyRound } from 'lucide-react'
+import { CircleAlert, GitBranch, Sparkles, KeyRound, AlertTriangle, ArrowRight } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -49,6 +49,10 @@ import {
   formatModelName,
   getFirstResponseTimeColor,
   getResponseTimeColor,
+  getRoutingBasisLabel,
+  getRoutingBasisSummary,
+  ROUTING_BASIS_DECISION_PATH,
+  ROUTING_BASIS_LABEL_MAP,
   getTieredBillingSummary,
   hasAnyCacheTokens,
   parseLogOther,
@@ -520,6 +524,121 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                 </Tooltip>
               </TooltipProvider>
             </button>
+          )
+        },
+      },
+      {
+        id: 'routing_basis',
+        header: t('Routing Basis'),
+        cell: function RoutingBasisCell({ row }) {
+          const log = row.original
+          if (!isDisplayableLogType(log.type)) return null
+
+          const other = parseLogOther(log.other)
+          const info = other?.routing_info
+
+          if (!info) {
+            return (
+              <span className='text-muted-foreground/50 text-xs'>
+                {t('Not Recorded')}
+              </span>
+            )
+          }
+
+          const { label, variant } = getRoutingBasisLabel(info?.basis, t)
+          const summary = getRoutingBasisSummary(info, t)
+          const description = info?.basis
+            ? ROUTING_BASIS_LABEL_MAP[info.basis]?.description
+            : undefined
+          const isFallback = info?.basis === 'fallback'
+
+          return (
+            <TooltipProvider delay={300}>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <div className='flex w-fit flex-col gap-0.5' />
+                  }
+                >
+                  <StatusBadge
+                    label={label}
+                    variant={variant}
+                    size='sm'
+                    showDot={false}
+                    copyable={false}
+                    icon={isFallback ? AlertTriangle : undefined}
+                    pulse={isFallback}
+                  />
+                </TooltipTrigger>
+                <TooltipContent side='top' className='text-xs max-w-[280px]'>
+                  <div className='space-y-1.5'>
+                    {/* 顶部：人话摘要 */}
+                    {summary && (
+                      <p className='text-foreground font-medium'>{summary}</p>
+                    )}
+
+                    {/* 中文说明 */}
+                    {description && (
+                      <p className='text-muted-foreground'>
+                        {description}
+                      </p>
+                    )}
+
+                    {/* 决策路径示意 */}
+                    <div className='border-t border-border/60 pt-1.5'>
+                      <p className='text-muted-foreground mb-1'>
+                        {t('Decision Path')}:
+                      </p>
+                      <div className='flex flex-col gap-0.5'>
+                        {ROUTING_BASIS_DECISION_PATH.map((step) => {
+                          const active = step.key === info?.basis
+                          return (
+                            <div
+                              key={step.key}
+                              className={[
+                                'flex items-start gap-1 rounded px-1 py-0.5',
+                                active
+                                  ? 'bg-primary/10 text-foreground font-medium'
+                                  : 'text-muted-foreground',
+                              ].join(' ')}
+                            >
+                              <span className='inline-flex items-center gap-1 shrink-0'>
+                                {active && (
+                                  <ArrowRight className='size-3 text-primary' />
+                                )}
+                                <span>{t(step.label)}</span>
+                              </span>
+                              <span className='text-muted-foreground/80'>
+                                {step.description}
+                              </span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+
+                    {/* 底部：原始数字字段 */}
+                    <div className='border-t border-border/60 pt-1.5 space-y-0.5'>
+                      <p>
+                        {t('Est. Tokens')}: {info.est_tokens ?? 0}
+                      </p>
+                      <p>
+                        {t('Base Priority')}: {info.base_priority ?? 0}
+                      </p>
+                      <p>
+                        {t('Effective Priority')}: {info.effective_priority ?? 0}
+                      </p>
+                      <p>
+                        {t('Boost')}: {info.boost ?? 0}
+                      </p>
+                      <p className={isFallback ? 'text-destructive font-medium' : ''}>
+                        {t('Fallback')}: {info.fallback ? t('Yes') : t('No')}
+                      </p>
+                    </div>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )
         },
       }

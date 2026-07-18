@@ -63,6 +63,8 @@ export const userSchema = z.object({
   admin_permissions: z
     .record(z.string(), z.record(z.string(), z.boolean()))
     .optional(),
+  // 后端批量填充的订阅状态：去重后按固定顺序逗号拼接（如 "active,pending"），无订阅时为空字符串。
+  subscription_statuses: z.string().optional(),
 })
 export type User = z.infer<typeof userSchema>
 
@@ -137,4 +139,4 @@ export interface ManageUserQuotaPayload {
 // Dialog Types
 // ============================================================================
 
-export type UsersDialogType = 'create' | 'update' | 'delete'
+export type UsersDialogType = 'create' | 'update' | 'delete' | 'batch_create'
