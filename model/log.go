@@ -610,13 +610,22 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 }
 
 type Stat struct {
-	Quota int `json:"quota"`
-	Rpm   int `json:"rpm"`
-	Tpm   int `json:"tpm"`
+	Quota            int `json:"quota"`
+	Rpm              int `json:"rpm"`
+	Tpm              int `json:"tpm"`
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	CachedTokens     int `json:"cached_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+	RequestCount     int `json:"request_count"`
 }
 
 func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
-	tx := LOG_DB.Table("logs").Select("COALESCE(sum(quota), 0) quota")
+	tx := LOG_DB.Table("logs").Select("COALESCE(sum(quota), 0) quota, " +
+		"COALESCE(sum(prompt_tokens), 0) prompt_tokens, " +
+		"COALESCE(sum(completion_tokens), 0) completion_tokens, " +
+		"COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) total_tokens, " +
+		"count(*) request_count")
 
 	// 为rpm和tpm创建单独的查询
 	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
@@ -667,6 +676,15 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 		common.SysError("failed to query rpm/tpm stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
+
+	// Cache tokens: Go-layer scan of matching log rows.
+	// Cross-dialect JSON extraction is brittle, so we parse the `other` field
+	// in application code. Filters mirror the main query above.
+	channelIds := []int{}
+	if channel != 0 {
+		channelIds = []int{channel}
+	}
+	stat.CachedTokens = sumCachedTokensForFilter(startTimestamp, endTimestamp, channelIds, nil, group)
 
 	return stat, nil
 }
