@@ -10,9 +10,9 @@
 
 ## 2. 后端 controller + router
 
-- [ ] 2.1 扩展 `GetLogsStat` 返回拆分的 token 字段（`prompt_tokens`/`completion_tokens`/`cached_tokens`/`total_tokens`）
-- [ ] 2.2 新建 `controller/report.go`，实现 `GetReportStats`、`GetTopChannels`、`GetTopUsers` 三个 handler
-- [ ] 2.3 在 `router/api-router.go` 注册 `/api/report/stats`、`/api/report/top/channels`、`/api/report/top/users` 路由，全部走 `AdminAuth()` 中间件
+- [x] 2.1 扩展 `GetLogsStat` 返回拆分的 token 字段（`prompt_tokens`/`completion_tokens`/`cached_tokens`/`total_tokens`）
+- [x] 2.2 新建 `controller/report.go`，实现 `GetReportStats`、`GetTopChannels`、`GetTopUsers` 三个 handler
+- [x] 2.3 在 `router/api-router.go` 注册 `/api/report/stats`、`/api/report/top/channels`、`/api/report/top/users` 路由，全部走 `AdminAuth()` 中间件
 - [ ] 2.4 集成测试：使用 httptest 验证权限（普通用户 403、admin 200）、参数校验、SQL 注入防护
 
 ## 3. 前端数据看板 token 拆分（default 主题）
