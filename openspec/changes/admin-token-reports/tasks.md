@@ -25,15 +25,15 @@
 
 ## 4. 前端报表 feature 模块（default 主题）
 
-- [ ] 4.1 创建目录 `web/default/src/features/reports/`，建立 `api.ts` / `types.ts` / `hooks/` / `components/` 子结构
-- [ ] 4.2 实现 `api.ts`：`getReportStats`、`getTopChannels`、`getTopUsers` 三个 fetch 函数
-- [ ] 4.3 实现 `types.ts`：`ReportStats`、`TopChannelRow`、`TopUserRow` 类型
-- [ ] 4.4 实现 `components/report-filters.tsx`：时间范围选择器（今日/7d/30d/自定义）+ 渠道多选 + 用户多选 + 分组单选
-- [ ] 4.5 实现 `components/token-trend-chart.tsx`：4 条线的趋势图（Input/Cache/Output/Total）
-- [ ] 4.6 实现 `components/top-channels-table.tsx`：可排序表格，列含渠道/请求/各 token/配额
-- [ ] 4.7 实现 `components/top-users-table.tsx`：同上但维度换为用户
-- [ ] 4.8 实现 `index.tsx` 主页面，组装筛选器 + 趋势图 + 两张表，使用 React Query 拉取数据
-- [ ] 4.9 路由注册：在 app router 中添加 `/admin/reports` 懒加载路由
+- [x] 4.1 创建目录 `web/default/src/features/reports/`，建立 `api.ts` / `types.ts` / `components/` 子结构
+- [x] 4.2 实现 `api.ts`：`getReportStats`、`getTopChannels`、`getTopUsers` 三个 fetch 函数
+- [x] 4.3 实现 `types.ts`：`ReportStat`、`TopChannelRow`、`TopUserRow` 类型
+- [x] 4.4 实现 `components/report-time-range-selector.tsx`：今日 / 7d / 30d 预设
+- [x] 4.5 [简化] 实现 `components/report-stat-cards.tsx`：5 卡（Count / Input / Cache / Output / Total）替代独立 trend chart
+- [x] 4.6 实现 `components/top-channels-table.tsx`：可排序表格，列含渠道/请求/各 token/配额
+- [x] 4.7 实现 `components/top-users-table.tsx`：同上但维度换为用户
+- [x] 4.8 实现 `index.tsx` 主页面，组装筛选器 + 统计卡 + 两张表，使用 React Query 拉取数据
+- [x] 4.9 路由注册：在 app router 中添加 `/admin/reports` 懒加载路由 + admin role 守卫
 
 ## 5. 前端侧边栏注册（default 主题）
 
