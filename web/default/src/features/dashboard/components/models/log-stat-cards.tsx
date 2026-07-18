@@ -31,6 +31,7 @@ import type {
   QuotaDataItem,
   DashboardFilters,
 } from '@/features/dashboard/types'
+import { api } from '@/lib/api'
 import { formatCompactNumber, formatNumber, formatQuota } from '@/lib/format'
 import { computeTimeRange } from '@/lib/time'
 import { cn } from '@/lib/utils'
@@ -42,6 +43,17 @@ interface LogStatCardsProps {
 }
 
 const MAX_INLINE_STAT_CHARS = 9
+
+interface LogStat {
+  quota: number
+  rpm: number
+  tpm: number
+  prompt_tokens: number
+  completion_tokens: number
+  cached_tokens: number
+  total_tokens: number
+  request_count: number
+}
 
 function formatStatNumber(value: number, locale: Intl.LocalesArgument) {
   const fullValue = formatNumber(value, locale)
@@ -61,11 +73,7 @@ export function LogStatCards(props: LogStatCardsProps) {
   const statCardsConfig = useModelStatCardsConfig()
   const user = useAuthStore((state) => state.auth.user)
   const isAdmin = !!(user?.role && user.role >= 10)
-  const [stats, setStats] = useState<{
-    totalQuota: number
-    totalCount: number
-    totalTokens: number
-  } | null>(null)
+  const [stats, setStats] = useState<LogStat | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
 
@@ -75,7 +83,6 @@ export function LogStatCards(props: LogStatCardsProps) {
 
   useEffect(() => {
     const abortController = new AbortController()
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
 
     setError(false)
@@ -89,12 +96,31 @@ export function LogStatCards(props: LogStatCardsProps) {
     const timeDiff = (timeRange.end_timestamp - timeRange.start_timestamp) / 60
     setTimeRangeMinutes(timeDiff)
 
-    getUserQuotaDates(buildQueryParams(timeRange, filters), isAdmin)
-      .then((res) => {
+    const params = buildQueryParams(timeRange, filters)
+    const fetchFn = isAdmin
+      ? api.get<{ success: boolean; data: LogStat }>('/api/log/stat', { params })
+      : getUserQuotaDates(params, false)
+
+    Promise.resolve(fetchFn)
+      .then((res: any) => {
         if (abortController.signal.aborted) return
-        const data = res?.data || []
-        setStats(calculateDashboardStats(data))
-        onDataUpdate?.(data, false)
+        const data = isAdmin ? res.data?.data : res?.data
+        if (isAdmin && data) {
+          setStats(data)
+        } else if (Array.isArray(data)) {
+          const c = calculateDashboardStats(data)
+          setStats({
+            quota: c.totalQuota,
+            rpm: c.totalCount,
+            tpm: c.totalTokens,
+            prompt_tokens: c.totalTokens,
+            completion_tokens: 0,
+            cached_tokens: 0,
+            total_tokens: c.totalTokens,
+            request_count: c.totalCount,
+          })
+        }
+        onDataUpdate?.(Array.isArray(data) ? data : [], false)
       })
       .catch(() => {
         if (abortController.signal.aborted) return
@@ -114,9 +140,12 @@ export function LogStatCards(props: LogStatCardsProps) {
   }, [filters, isAdmin, onDataUpdate])
 
   const adaptedStats = {
-    rpm: stats?.totalCount ?? 0,
-    quota: stats?.totalQuota ?? 0,
-    tpm: stats?.totalTokens ?? 0,
+    rpm: stats?.rpm ?? 0,
+    quota: stats?.quota ?? 0,
+    tpm: stats?.total_tokens ?? 0,
+    prompt_tokens: stats?.prompt_tokens ?? 0,
+    completion_tokens: stats?.completion_tokens ?? 0,
+    cached_tokens: stats?.cached_tokens ?? 0,
   }
 
   const items = statCardsConfig.map((config) => {
@@ -141,7 +170,7 @@ export function LogStatCards(props: LogStatCardsProps) {
 
   return (
     <div className='overflow-hidden rounded-lg border'>
-      <div className='divide-border/60 grid min-w-0 grid-cols-2 divide-x sm:grid-cols-3 lg:grid-cols-5'>
+      <div className='divide-border/60 grid min-w-0 grid-cols-2 divide-x sm:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8'>
         {items.map((it, idx) => {
           const Icon = it.icon
           return (

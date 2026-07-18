@@ -17,11 +17,11 @@
 
 ## 3. 前端数据看板 token 拆分（default 主题）
 
-- [ ] 3.1 更新 `web/default/src/features/dashboard/hooks/use-dashboard-config.tsx` 的 `useSummaryCardsConfig`，扩展返回值支持 4 个 token 指标
-- [ ] 3.2 修改 `web/default/src/features/dashboard/components/overview/summary-cards.tsx`，布局改为 `md:grid-cols-4`，新增 Input/Cache/Output/Total 四卡
-- [ ] 3.3 更新 `useModelStatCardsConfig` 同步拆分（数据面板侧边栏）
-- [ ] 3.4 扩展 `web/default/src/features/dashboard/api.ts` 的 stat 响应类型，加入新字段
-- [ ] 3.5 验证 build：`cd web/default && bun run build`
+- [x] 3.1 更新 `web/default/src/features/dashboard/hooks/use-dashboard-config.tsx` 的 `useSummaryCardsConfig`，扩展返回值支持 4 个 token 指标
+- [x] 3.2 修改 `web/default/src/features/dashboard/components/overview/summary-cards.tsx`，布局改为 `md:grid-cols-4`，新增 Input/Cache/Output/Total 四卡
+- [x] 3.3 更新 `useModelStatCardsConfig` 同步拆分（数据面板侧边栏）
+- [x] 3.4 扩展 `web/default/src/features/dashboard/api.ts` 的 stat 响应类型，加入新字段
+- [x] 3.5 验证 build：`cd web/default && bun run build`
 
 ## 4. 前端报表 feature 模块（default 主题）
 

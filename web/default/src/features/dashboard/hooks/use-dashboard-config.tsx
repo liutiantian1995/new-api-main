@@ -25,6 +25,8 @@ import {
   Flame,
   TrendingUp,
   Activity,
+  ArrowDownToLine,
+  ArrowUpFromLine,
   type LucideIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -56,6 +58,27 @@ export function useModelStatCardsConfig(): StatCardConfig[] {
       description: t('Statistical quota'),
       icon: Coins,
       getValue: (stat) => stat?.quota ?? 0,
+    },
+    {
+      key: 'inputTokens',
+      title: t('Input Tokens'),
+      description: t('Prompt tokens'),
+      icon: ArrowDownToLine,
+      getValue: (stat) => stat?.prompt_tokens ?? 0,
+    },
+    {
+      key: 'cachedTokens',
+      title: t('Cache Hit'),
+      description: t('Cached prompt tokens'),
+      icon: Layers,
+      getValue: (stat) => stat?.cached_tokens ?? 0,
+    },
+    {
+      key: 'outputTokens',
+      title: t('Output Tokens'),
+      description: t('Completion tokens'),
+      icon: ArrowUpFromLine,
+      getValue: (stat) => stat?.completion_tokens ?? 0,
     },
     {
       key: 'tokens',
