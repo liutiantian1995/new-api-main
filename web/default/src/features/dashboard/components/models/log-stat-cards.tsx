@@ -183,6 +183,15 @@ export function LogStatCards(props: LogStatCardsProps) {
     prompt_tokens: stats?.prompt_tokens ?? 0,
     completion_tokens: stats?.completion_tokens ?? 0,
     cached_tokens: stats?.cached_tokens ?? 0,
+    // 卡片配置 (use-dashboard-config.tsx) 直接读这两个字段：
+    //   - Total Count 卡片读 stat.request_count
+    //   - Total Tokens 卡片读 stat.total_tokens
+    //   - Average RPM/TPM 卡片读 stat.request_count / stat.total_tokens
+    // admin 路径下 stats 含真实窗口值；非 admin 路径下 LogStat 已被
+    // setStats({ request_count: c.totalCount, total_tokens: c.totalTokens, ... })
+    // 正确填充，所以直接透传即可。
+    request_count: stats?.request_count ?? stats?.rpm ?? 0,
+    total_tokens: stats?.total_tokens ?? stats?.tpm ?? 0,
   }
 
   const items = statCardsConfig.map((config) => {
