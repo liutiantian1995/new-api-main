@@ -59,7 +59,20 @@ func GetReportStats(c *gin.Context) {
 }
 
 // GetReportTopChannels handles GET /api/report/top/channels.
-// Returns the top-N channels by total token consumption.
+// Returns the top-N channels by total token consumption, plus the count of
+// distinct active channels in the same window so the UI can default the
+// limit to "top 10%" and offer a "show all" option.
+//
+// Query params:
+//   - start_timestamp, end_timestamp: window bounds (unix seconds)
+//   - limit: <=0 returns ALL active channels; otherwise the top-N cap
+//
+// Response:
+//
+//	{
+//	  "success": true,
+//	  "data": { "rows": [...], "total": <int> }
+//	}
 func GetReportTopChannels(c *gin.Context) {
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
@@ -69,10 +82,14 @@ func GetReportTopChannels(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	total, _ := model.CountActiveChannels(startTimestamp, endTimestamp)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    rows,
+		"data": gin.H{
+			"rows":  rows,
+			"total": total,
+		},
 	})
 }
 

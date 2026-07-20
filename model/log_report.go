@@ -2,6 +2,7 @@ package model
 
 import (
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"gorm.io/gorm"
 )
 
@@ -18,15 +19,19 @@ type ReportStat struct {
 }
 
 // TopChannelRow is one row in the channel top-N report.
+// Amount is the estimated cost in USD based on each model's pricing ratio,
+// computed as (prompt+cached)*ratio + completion*ratio*completion_ratio,
+// then converted to dollars via the standard USD/Quota factor.
 type TopChannelRow struct {
-	ChannelID        int    `json:"channel_id" gorm:"column:channel_id"`
-	ChannelName      string `json:"channel_name" gorm:"column:channel_name"`
-	PromptTokens     int    `json:"prompt_tokens" gorm:"column:prompt_tokens"`
-	CompletionTokens int    `json:"completion_tokens" gorm:"column:completion_tokens"`
-	CachedTokens     int    `json:"cached_tokens" gorm:"column:cached_tokens"`
-	TotalTokens      int    `json:"total_tokens" gorm:"column:total_tokens"`
-	Quota            int    `json:"quota" gorm:"column:quota"`
-	RequestCount     int    `json:"request_count" gorm:"column:request_count"`
+	ChannelID        int     `json:"channel_id" gorm:"column:channel_id"`
+	ChannelName      string  `json:"channel_name" gorm:"column:channel_name"`
+	PromptTokens     int     `json:"prompt_tokens" gorm:"column:prompt_tokens"`
+	CompletionTokens int     `json:"completion_tokens" gorm:"column:completion_tokens"`
+	CachedTokens     int     `json:"cached_tokens" gorm:"column:cached_tokens"`
+	TotalTokens      int     `json:"total_tokens" gorm:"column:total_tokens"`
+	Quota            int     `json:"quota" gorm:"column:quota"`
+	RequestCount     int     `json:"request_count" gorm:"column:request_count"`
+	Amount           float64 `json:"amount" gorm:"column:amount"`
 }
 
 // TopUserRow is one row in the user top-N report.
@@ -71,15 +76,10 @@ func GetReportStats(startTimestamp, endTimestamp int64, channelIds []int, userId
 
 // GetTopChannels returns the top-N channels by total token consumption.
 // channelName is fetched via LEFT JOIN channels on channel_id = id.
+// limit <= 0 means "return all channels" (used by the 全部展示 option).
 func GetTopChannels(startTimestamp, endTimestamp int64, limit int) ([]TopChannelRow, error) {
-	if limit <= 0 {
-		limit = 10
-	}
-	if limit > 100 {
-		limit = 100
-	}
 	var rows []TopChannelRow
-	err := LOG_DB.Table("logs").
+	query := LOG_DB.Table("logs").
 		Select("channel_id, "+
 			"COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "+
 			"COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "+
@@ -91,10 +91,11 @@ func GetTopChannels(startTimestamp, endTimestamp int64, limit int) ([]TopChannel
 		Where("created_at >= ?", startTimestamp).
 		Where("created_at <= ?", endTimestamp).
 		Group("channel_id").
-		Order("total_tokens DESC").
-		Limit(limit).
-		Scan(&rows).Error
-	if err != nil {
+		Order("request_count DESC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if err := query.Scan(&rows).Error; err != nil {
 		common.SysError("failed to query top channels: " + err.Error())
 		return nil, err
 	}
@@ -111,7 +112,28 @@ func GetTopChannels(startTimestamp, endTimestamp int64, limit int) ([]TopChannel
 	}
 	// Cache tokens: scan matching rows per channel.
 	populateTopCachedTokensChannel(&rows, startTimestamp, endTimestamp)
+	// Estimated USD cost based on each channel's model pricing ratios.
+	populateTopAmountChannel(&rows, startTimestamp, endTimestamp)
 	return rows, nil
+}
+
+// CountActiveChannels returns the number of distinct channel_ids that produced
+// consumption logs within the window. Used by the report UI to default the
+// "top channels" limit to 10% of the active set.
+func CountActiveChannels(startTimestamp, endTimestamp int64) (int64, error) {
+	var count int64
+	err := LOG_DB.Table("logs").
+		Where("type = ?", LogTypeConsume).
+		Where("channel_id != 0").
+		Where("created_at >= ?", startTimestamp).
+		Where("created_at <= ?", endTimestamp).
+		Distinct("channel_id").
+		Count(&count).Error
+	if err != nil {
+		common.SysError("failed to count active channels: " + err.Error())
+		return 0, err
+	}
+	return count, nil
 }
 
 // GetTopUsers returns the top-N users by total token consumption.
@@ -136,7 +158,7 @@ func GetTopUsers(startTimestamp, endTimestamp int64, limit int) ([]TopUserRow, e
 		Where("created_at >= ?", startTimestamp).
 		Where("created_at <= ?", endTimestamp).
 		Group("user_id").
-		Order("total_tokens DESC").
+		Order("request_count DESC").
 		Limit(limit).
 		Scan(&rows).Error
 	if err != nil {
@@ -298,6 +320,89 @@ func extractCacheTokens(otherJSON string) int {
 		}
 	}
 	return sum
+}
+
+// populateTopAmountChannel computes an estimated USD cost per channel based
+// on each model's pricing ratio. Unlike the stored `quota` field (which also
+// applies per-user group multipliers), this reflects raw model pricing so
+// admins can compare channels by base cost.
+//
+// Formula per log row:
+//
+//	(p + cache) * ratio + completion * ratio * completionRatio
+//
+// aggregated per model, summed per channel, then converted to USD via
+// ratio_setting.USD (=500, i.e. 1 ratio unit = $0.002 per 1K tokens).
+//
+// IMPORTANT: scans only logs whose channel_id matches one of the rows
+// already in `rows`, never the entire time range.
+func populateTopAmountChannel(rows *[]TopChannelRow, startTimestamp, endTimestamp int64) {
+	if len(*rows) == 0 {
+		return
+	}
+	channelIds := make([]int, 0, len(*rows))
+	for _, r := range *rows {
+		channelIds = append(channelIds, r.ChannelID)
+	}
+
+	type row struct {
+		ChannelID        int    `gorm:"column:channel_id"`
+		ModelName        string `gorm:"column:model_name"`
+		PromptTokens     int    `gorm:"column:prompt_tokens"`
+		CompletionTokens int    `gorm:"column:completion_tokens"`
+		Other            string `gorm:"column:other"`
+	}
+	var raws []row
+	if err := LOG_DB.Table("logs").
+		Select("channel_id, model_name, prompt_tokens, completion_tokens, other").
+		Where("type = ?", LogTypeConsume).
+		Where("channel_id IN ?", channelIds).
+		Where("created_at >= ?", startTimestamp).
+		Where("created_at <= ?", endTimestamp).
+		Scan(&raws).Error; err != nil {
+		common.SysLog("failed to scan logs for amount calc: " + err.Error())
+		return
+	}
+
+	perChannel := make(map[int]float64, len(*rows))
+	for _, r := range raws {
+		cached := extractCacheTokens(r.Other)
+		perChannel[r.ChannelID] += computeModelAmountUSD(
+			r.ModelName, r.PromptTokens, cached, r.CompletionTokens,
+		)
+	}
+	for i := range *rows {
+		(*rows)[i].Amount = perChannel[(*rows)[i].ChannelID]
+	}
+}
+
+// computeModelAmountUSD returns the estimated USD cost for a single log row
+// based on its model's pricing ratios. Looks up both the prompt and
+// completion ratios; falls back to a sensible default when a model is not
+// registered (the same fallback GetModelRatio uses) so unknown models still
+// contribute a non-zero estimate.
+//
+// NOTE: prompt_tokens already includes cached_tokens (see service/text_quota.go
+// where summary.PromptTokens = usage.PromptTokens and CacheTokens is a subset).
+// We must NOT add cached again here, otherwise cache would be billed twice.
+// Cache-write (Claude cache_creation) is priced at prompt ratio here for
+// simplicity; precise cache_read discount can be added later if needed.
+func computeModelAmountUSD(modelName string, prompt, cached, completion int) float64 {
+	if modelName == "" {
+		return 0
+	}
+	// 防御性兜底：万一上游某些路径写入了 prompt<cached 的异常数据，按 0 处理避免负数
+	if prompt < cached {
+		cached = prompt
+	}
+	_ = cached // 当前实现按 prompt_tokens 已含 cache 的语义直接计费；保留参数以备后续精细拆分
+	ratio, _, _ := ratio_setting.GetModelRatio(modelName)
+	completionRatio := ratio_setting.GetCompletionRatio(modelName)
+	// ratio=1 means $0.002 per 1K tokens -> $1 per 500_000 token-ratio units
+	const ratioUnitsPerUSD = float64(ratio_setting.USD) * 1000 // = 500_000
+	promptUnits := float64(prompt) * ratio
+	completionUnits := float64(completion) * ratio * completionRatio
+	return (promptUnits + completionUnits) / ratioUnitsPerUSD
 }
 
 // batchGetChannelNames fetches names for a list of channel IDs in one query.

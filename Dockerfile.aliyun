@@ -46,7 +46,8 @@ ENV GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64}
 WORKDIR /build
 
 ADD go.mod go.sum ./
-RUN go mod download
+# goproxy.cn 有时遇到意外 EOF，重试通常即可解决
+RUN go mod download || go mod download || go mod download
 
 COPY . .
 COPY --from=builder /build/web/default/dist ./web/default/dist
@@ -58,15 +59,17 @@ RUN go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$
 # ============================================================
 FROM docker.m.daocloud.io/library/debian:bookworm-slim
 
-# 切换到阿里云 Debian 镜像源，加速 apt-get（默认 deb.debian.org 在国内极慢）
-RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
-        sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources; \
-    fi && \
-    if [ -f /etc/apt/sources.list ]; then \
-        sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list; \
-    fi
-
-RUN apt-get update \
+# 使用清华 TUNA 镜像；bookworm-updates 仓库在多个国内镜像源上偶发 502，
+# 直接从 Suites 中移除（updates 仅含小修复包，非必需）。
+# 注意 debian.sources 是 deb822 格式，不能整行删除，否则会破坏 Suites 字段。
+RUN set -eux; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do \
+        if [ -f "$f" ]; then \
+            sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g; s|security.debian.org|mirrors.tuna.tsinghua.edu.cn|g' "$f"; \
+            sed -i 's| bookworm-updates||g; s|bookworm-updates ||g' "$f"; \
+        fi; \
+    done; \
+    apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata libasan8 wget \
     && rm -rf /var/lib/apt/lists/* \
     && update-ca-certificates

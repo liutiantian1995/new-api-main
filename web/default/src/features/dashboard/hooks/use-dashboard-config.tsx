@@ -50,7 +50,9 @@ export function useModelStatCardsConfig(): StatCardConfig[] {
       title: t('Total Count'),
       description: t('Statistical count'),
       icon: Hash,
-      getValue: (stat) => stat?.rpm ?? 0,
+      // 用 request_count（时间窗口内真实总请求数），不要用 rpm——rpm 只统计最近 60 秒，
+      // 当短时间内无新请求时总数会显示 0，与 "Total Count" 的语义不符。
+      getValue: (stat) => stat?.request_count ?? stat?.rpm ?? 0,
     },
     {
       key: 'quota',
@@ -85,23 +87,29 @@ export function useModelStatCardsConfig(): StatCardConfig[] {
       title: t('Total Tokens'),
       description: t('Statistical tokens'),
       icon: Layers,
-      getValue: (stat) => stat?.tpm ?? 0,
+      // 用 total_tokens（窗口内真实总 tokens），不要用 tpm--tpm 只统计最近 60 秒，
+      // 当短时间内无新请求时总数会显示 0，与 "Total Tokens" 的语义不符。
+      getValue: (stat) => stat?.total_tokens ?? stat?.tpm ?? 0,
     },
     {
       key: 'avgRpm',
       title: t('Average RPM'),
       description: t('Requests per minute'),
       icon: Gauge,
+      // 窗口内平均每分钟请求数 = 总请求数 / 时间窗口分钟数
+      // 用 request_count 而不是 rpm（rpm 是 60 秒瞬时值，除以 minutes 后接近 0）
       getValue: (stat, timeRangeMinutes = 1) =>
-        safeDivide(stat?.rpm ?? 0, timeRangeMinutes),
+        safeDivide(stat?.request_count ?? stat?.rpm ?? 0, timeRangeMinutes),
     },
     {
       key: 'avgTpm',
       title: t('Average TPM'),
       description: t('Tokens per minute'),
       icon: Zap,
+      // 窗口内平均每分钟 tokens = 总 tokens / 时间窗口分钟数
+      // 用 total_tokens 而不是 tpm（tpm 是 60 秒瞬时值，除以 minutes 后接近 0）
       getValue: (stat, timeRangeMinutes = 1) =>
-        safeDivide(stat?.tpm ?? 0, timeRangeMinutes),
+        safeDivide(stat?.total_tokens ?? stat?.tpm ?? 0, timeRangeMinutes),
     },
   ]
 }

@@ -121,13 +121,29 @@ export function LogStatCards(props: LogStatCardsProps) {
           .then((r) => r.data)
       : getUserQuotaDates(params, false)
 
+    // 管理员路径额外并行拉取图表数据（/api/log/stat 仅返回标量统计，
+    // 不携带 per-model 时序数组，模型调用分析/消耗分布图表会因此空白）
+    const chartDataPromise: Promise<QuotaDataResponse | null> = isAdmin
+      ? getUserQuotaDates(params, true)
+          .then((data) => data)
+          .catch(() => null)
+      : Promise.resolve(null)
+
     promise
       .then((data: StatResponse | QuotaDataResponse) => {
         if (abortController.signal.aborted) return
         const payload = (data as QuotaDataResponse)?.data
         if (isAdmin && !Array.isArray(payload)) {
           setStats(payload as LogStat)
-          onDataUpdate?.([], false)
+          // 等待图表数据就绪后再传递，避免先用空数组覆盖再被刷新
+          chartDataPromise.then((chartRes) => {
+            if (abortController.signal.aborted) return
+            const chartPayload = chartRes?.data
+            onDataUpdate?.(
+              Array.isArray(chartPayload) ? chartPayload : [],
+              false
+            )
+          })
         } else if (Array.isArray(payload)) {
           const c = calculateDashboardStats(payload)
           setStats({

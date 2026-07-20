@@ -20,6 +20,11 @@ interface TopParams {
   limit?: number
 }
 
+interface TopChannelsEnvelope {
+  rows: TopChannelRow[]
+  total: number
+}
+
 export async function getReportStats(
   params: ReportStatsParams
 ): Promise<ReportStat> {
@@ -45,12 +50,12 @@ export async function getReportStats(
 
 export async function getTopChannels(
   params: TopParams
-): Promise<TopChannelRow[]> {
-  const res = await api.get<{ success: boolean; data: TopChannelRow[] }>(
-    '/api/report/top/channels',
-    { params }
-  )
-  return res.data.data ?? []
+): Promise<TopChannelsEnvelope> {
+  const res = await api.get<{
+    success: boolean
+    data: TopChannelsEnvelope
+  }>('/api/report/top/channels', { params })
+  return res.data.data ?? { rows: [], total: 0 }
 }
 
 export async function getTopUsers(

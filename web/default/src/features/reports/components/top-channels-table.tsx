@@ -65,6 +65,14 @@ export function TopChannelsTable({ rows, loading }: Props) {
           cellClassName: 'text-right font-mono tabular-nums',
           cell: (r) => formatQuota(r.quota),
         },
+        {
+          id: 'amount',
+          header: t('Estimated Amount'),
+          className: 'text-right',
+          cellClassName: 'text-right font-mono tabular-nums',
+          // amount 已经是美元，用 formatQuota 走同一套货币兑换管线（配置 CNY/USD/Token）
+          cell: (r) => formatQuota(Math.round(r.amount * 500)),
+        },
       ]}
     />
   )
