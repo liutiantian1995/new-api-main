@@ -23,6 +23,24 @@ import { parseQuotaFromDollars, quotaUnitsToDollars } from '@/lib/format'
 
 import type { SubscriptionPlan, PlanPayload } from '../types'
 
+// HH:mm string → minutes-of-day (0-1439). Returns null for empty/invalid input.
+function hhmmToMinutes(hhmm: string | null | undefined): number | null {
+  if (!hhmm) return null
+  const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(hhmm.trim())
+  if (!m) return null
+  return Number(m[1]) * 60 + Number(m[2])
+}
+
+// Minutes-of-day (0-1439) → "HH:mm". Returns null for null/undefined.
+function minutesToHhmm(minutes: number | null | undefined): string | null {
+  if (minutes == null || Number.isNaN(minutes)) return null
+  const clamped = Math.max(0, Math.min(1439, Math.trunc(minutes)))
+  if (clamped === 0) return null // 0/0 means all-day → empty form fields
+  const h = Math.floor(clamped / 60)
+  const mm = clamped % 60
+  return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`
+}
+
 export function getPlanFormSchema(t: TFunction) {
   return z.object({
     title: z.string().min(1, t('Please enter plan title')),
@@ -39,6 +57,8 @@ export function getPlanFormSchema(t: TFunction) {
       'custom',
     ]),
     quota_reset_custom_seconds: z.coerce.number().min(0).optional(),
+    daily_active_start: z.string().nullable().optional(),
+    daily_active_end: z.string().nullable().optional(),
     enabled: z.boolean(),
     sort_order: z.coerce.number(),
     allow_balance_pay: z.boolean(),
@@ -50,6 +70,17 @@ export function getPlanFormSchema(t: TFunction) {
     stripe_price_id: z.string().optional(),
     creem_product_id: z.string().optional(),
     waffo_pancake_product_id: z.string().optional(),
+  }).superRefine((val, ctx) => {
+    const start = val.daily_active_start ?? null
+    const end = val.daily_active_end ?? null
+    // Either both filled or both empty. Partial fill is invalid.
+    if ((start == null) !== (end == null)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: t('Daily active start and end must both be set or both be empty'),
+        path: ['daily_active_start'],
+      })
+    }
   })
 }
 
@@ -64,6 +95,8 @@ export const PLAN_FORM_DEFAULTS: PlanFormValues = {
   custom_seconds: 0,
   quota_reset_period: 'never',
   quota_reset_custom_seconds: 0,
+  daily_active_start: null,
+  daily_active_end: null,
   enabled: true,
   sort_order: 0,
   allow_balance_pay: true,
@@ -78,6 +111,8 @@ export const PLAN_FORM_DEFAULTS: PlanFormValues = {
 }
 
 export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
+  const startMin = Number(plan.daily_active_start_minutes || 0)
+  const endMin = Number(plan.daily_active_end_minutes || 0)
   return {
     title: plan.title || '',
     subtitle: plan.subtitle || '',
@@ -87,6 +122,9 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
     custom_seconds: Number(plan.custom_seconds || 0),
     quota_reset_period: plan.quota_reset_period || 'never',
     quota_reset_custom_seconds: Number(plan.quota_reset_custom_seconds || 0),
+    // Only populate form fields when window is not all-day (0/0).
+    daily_active_start: startMin === 0 && endMin === 0 ? null : minutesToHhmm(startMin),
+    daily_active_end: startMin === 0 && endMin === 0 ? null : minutesToHhmm(endMin),
     enabled: plan.enabled !== false,
     sort_order: Number(plan.sort_order || 0),
     allow_balance_pay: plan.allow_balance_pay !== false,
@@ -102,6 +140,8 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
 }
 
 export function formValuesToPlanPayload(values: PlanFormValues): PlanPayload {
+  const startMin = hhmmToMinutes(values.daily_active_start ?? null)
+  const endMin = hhmmToMinutes(values.daily_active_end ?? null)
   return {
     plan: {
       ...values,
@@ -114,6 +154,9 @@ export function formValuesToPlanPayload(values: PlanFormValues): PlanPayload {
         values.quota_reset_period === 'custom'
           ? Number(values.quota_reset_custom_seconds || 0)
           : 0,
+      // Both null/undefined → 0/0 (all-day). Otherwise emit minutes-of-day.
+      daily_active_start_minutes: startMin == null ? 0 : startMin,
+      daily_active_end_minutes: endMin == null ? 0 : endMin,
       sort_order: Number(values.sort_order || 0),
       max_purchase_per_user: Number(values.max_purchase_per_user || 0),
       total_amount: parseQuotaFromDollars(Number(values.total_amount || 0)),

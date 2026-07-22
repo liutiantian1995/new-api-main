@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -203,6 +204,9 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "自定义重置周期需大于0秒")
 		return
 	}
+	if err := validatePlanDailyWindow(c, &req.Plan); err != nil {
+		return
+	}
 	err := model.DB.Create(&req.Plan).Error
 	if err != nil {
 		common.ApiError(c, err)
@@ -277,6 +281,9 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "自定义重置周期需大于0秒")
 		return
 	}
+	if err := validatePlanDailyWindow(c, &req.Plan); err != nil {
+		return
+	}
 
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		// update plan (allow zero values updates with map)
@@ -299,6 +306,8 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"downgrade_group":            req.Plan.DowngradeGroup,
 			"quota_reset_period":         req.Plan.QuotaResetPeriod,
 			"quota_reset_custom_seconds": req.Plan.QuotaResetCustomSeconds,
+			"daily_active_start_minutes": req.Plan.DailyActiveStartMinutes,
+			"daily_active_end_minutes":   req.Plan.DailyActiveEndMinutes,
 			"updated_at":                 common.GetTimestamp(),
 		}
 		if req.Plan.AllowBalancePay != nil {
@@ -345,6 +354,24 @@ func AdminUpdateSubscriptionPlanStatus(c *gin.Context) {
 	}
 	model.InvalidateSubscriptionPlanCache(id)
 	common.ApiSuccess(c, nil)
+}
+
+// validatePlanDailyWindow validates the daily active window fields of a plan.
+// Returns nil on success; on failure writes a 400 response to c and returns an error.
+// Both fields must be in [0, 1439]. Equal non-zero values are normalized to 0/0
+// (all-day) by the model layer's NormalizeDefaults.
+func validatePlanDailyWindow(c *gin.Context, plan *model.SubscriptionPlan) error {
+	const minOK = 0
+	if plan.DailyActiveStartMinutes < minOK || plan.DailyActiveStartMinutes > model.DailyMaxMinutes {
+		common.ApiErrorMsg(c, "每日生效时间超出合法范围（0-1439）")
+		return errors.New("daily_active_start_minutes out of range")
+	}
+	if plan.DailyActiveEndMinutes < minOK || plan.DailyActiveEndMinutes > model.DailyMaxMinutes {
+		common.ApiErrorMsg(c, "每日失效时间超出合法范围（0-1439）")
+		return errors.New("daily_active_end_minutes out of range")
+	}
+	plan.NormalizeDefaults()
+	return nil
 }
 
 type AdminBindSubscriptionRequest struct {

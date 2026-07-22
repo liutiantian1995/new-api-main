@@ -192,6 +192,11 @@ type SubscriptionPlan struct {
 	QuotaResetPeriod        string `json:"quota_reset_period" gorm:"type:varchar(16);default:'never'"`
 	QuotaResetCustomSeconds int64  `json:"quota_reset_custom_seconds" gorm:"type:bigint;default:0"`
 
+	// Daily active window (minutes-of-day, 0-1439).
+	// start == end (incl. 0/0) means all day. start > end means cross-midnight.
+	DailyActiveStartMinutes int `json:"daily_active_start_minutes" gorm:"type:int;default:0"`
+	DailyActiveEndMinutes   int `json:"daily_active_end_minutes" gorm:"type:int;default:0"`
+
 	CreatedAt int64 `json:"created_at" gorm:"bigint"`
 	UpdatedAt int64 `json:"updated_at" gorm:"bigint"`
 }
@@ -215,6 +220,50 @@ func (p *SubscriptionPlan) NormalizeDefaults() {
 	if p.AllowWalletOverflow == nil {
 		p.AllowWalletOverflow = common.GetPointer(true)
 	}
+	// Clamp daily window fields into [0, 1439].
+	if p.DailyActiveStartMinutes < 0 {
+		p.DailyActiveStartMinutes = 0
+	}
+	if p.DailyActiveStartMinutes > 1439 {
+		p.DailyActiveStartMinutes = 1439
+	}
+	if p.DailyActiveEndMinutes < 0 {
+		p.DailyActiveEndMinutes = 0
+	}
+	if p.DailyActiveEndMinutes > 1439 {
+		p.DailyActiveEndMinutes = 1439
+	}
+	// start == end (including 0/0) means "all day" — normalize to 0/0.
+	if p.DailyActiveStartMinutes == p.DailyActiveEndMinutes {
+		p.DailyActiveStartMinutes = 0
+		p.DailyActiveEndMinutes = 0
+	}
+}
+
+// DailyMaxMinutes is the inclusive upper bound for a minute-of-day value.
+const DailyMaxMinutes = 1439
+
+// IsWithinDailyWindow reports whether the given wall-clock minute-of-day m
+// falls inside the daily window defined by [start, end) minutes.
+//   - start == end (incl. 0/0) means "all day" → always true.
+//   - start < end means a same-day window: m in [start, end).
+//   - start > end means a cross-midnight window: m >= start OR m < end.
+func IsWithinDailyWindow(start, end, m int) bool {
+	if start == end {
+		return true
+	}
+	if start < end {
+		return m >= start && m < end
+	}
+	// cross-midnight
+	return m >= start || m < end
+}
+
+// currentMinuteOfDay returns the current wall-clock minute-of-day (0-1439)
+// in the server process's local time zone.
+func currentMinuteOfDay() int {
+	now := time.Now().Local()
+	return now.Hour()*60 + now.Minute()
 }
 
 // Subscription order (payment -> webhook -> create UserSubscription)
@@ -282,6 +331,11 @@ type UserSubscription struct {
 
 	// Whether wallet fallback is allowed after this subscription's quota is exhausted (snapshot from plan)
 	AllowWalletOverflow bool `json:"allow_wallet_overflow"`
+
+	// Daily active window snapshot from plan (minutes-of-day, 0-1439).
+	// start == end (incl. 0/0) means all day. start > end means cross-midnight.
+	DailyActiveStartMinutes int `json:"daily_active_start_minutes" gorm:"type:int;default:0"`
+	DailyActiveEndMinutes   int `json:"daily_active_end_minutes" gorm:"type:int;default:0"`
 
 	CreatedAt int64 `json:"created_at" gorm:"bigint"`
 	UpdatedAt int64 `json:"updated_at" gorm:"bigint"`
@@ -588,22 +642,24 @@ func CreateUserSubscriptionFromPlanTxWithStrategy(tx *gorm.DB, userId int, plan 
 	}
 
 	sub := &UserSubscription{
-		UserId:              userId,
-		PlanId:              plan.Id,
-		AmountTotal:         plan.TotalAmount,
-		AmountUsed:          0,
-		StartTime:           startTime,
-		EndTime:             endUnix,
-		Status:              subStatus,
-		Source:              source,
-		LastResetTime:       lastReset,
-		NextResetTime:       nextReset,
-		UpgradeGroup:        upgradeGroup,
-		PrevUserGroup:       prevGroup,
-		DowngradeGroup:      strings.TrimSpace(plan.DowngradeGroup),
-		AllowWalletOverflow: allowWalletOverflow,
-		CreatedAt:           common.GetTimestamp(),
-		UpdatedAt:           common.GetTimestamp(),
+		UserId:                  userId,
+		PlanId:                  plan.Id,
+		AmountTotal:             plan.TotalAmount,
+		AmountUsed:              0,
+		StartTime:               startTime,
+		EndTime:                 endUnix,
+		Status:                  subStatus,
+		Source:                  source,
+		LastResetTime:           lastReset,
+		NextResetTime:           nextReset,
+		UpgradeGroup:            upgradeGroup,
+		PrevUserGroup:           prevGroup,
+		DowngradeGroup:          strings.TrimSpace(plan.DowngradeGroup),
+		AllowWalletOverflow:     allowWalletOverflow,
+		DailyActiveStartMinutes: plan.DailyActiveStartMinutes,
+		DailyActiveEndMinutes:   plan.DailyActiveEndMinutes,
+		CreatedAt:               common.GetTimestamp(),
+		UpdatedAt:               common.GetTimestamp(),
 	}
 	if err := tx.Create(sub).Error; err != nil {
 		return nil, err
@@ -1000,38 +1056,65 @@ func GetAllActiveUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 	return buildSubscriptionSummaries(subs), nil
 }
 
-// HasActiveUserSubscription returns whether the user has any active subscription.
+// HasActiveUserSubscription returns whether the user has any subscription that
+// is currently usable — active, not expired, AND inside its daily active window.
 // This is a lightweight existence check to avoid heavy pre-consume transactions.
 func HasActiveUserSubscription(userId int) (bool, error) {
 	if userId <= 0 {
 		return false, errors.New("invalid userId")
 	}
 	now := common.GetTimestamp()
-	var count int64
-	if err := DB.Model(&UserSubscription{}).
+	var subs []UserSubscription
+	// Pull only the columns we need; the candidate set per user is tiny.
+	if err := DB.Select("id", "daily_active_start_minutes", "daily_active_end_minutes").
 		Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
-		Count(&count).Error; err != nil {
+		Find(&subs).Error; err != nil {
 		return false, err
 	}
-	return count > 0, nil
+	if len(subs) == 0 {
+		return false, nil
+	}
+	m := currentMinuteOfDay()
+	for _, sub := range subs {
+		if IsWithinDailyWindow(sub.DailyActiveStartMinutes, sub.DailyActiveEndMinutes, m) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // UserActiveSubscriptionsAllowWalletOverflow returns whether wallet balance may be used
-// after the user's subscription quota is exhausted. A single active subscription that
-// disallows wallet overflow (allow_wallet_overflow = false) blocks the fallback.
+// after the user's subscription quota is exhausted. A subscription that disallows wallet
+// overflow (allow_wallet_overflow = false) blocks the fallback ONLY when it is currently
+// inside its daily active window — a window-strict subscription that is currently outside
+// its window is effectively invisible to the billing path (no quota can be drawn from it),
+// so it MUST NOT prevent the wallet fallback.
 func UserActiveSubscriptionsAllowWalletOverflow(userId int) (bool, error) {
 	if userId <= 0 {
 		return false, errors.New("invalid userId")
 	}
 	now := common.GetTimestamp()
-	var strictCount int64
-	if err := DB.Model(&UserSubscription{}).
+	var strictSubs []UserSubscription
+	// Pull only strict subscriptions and evaluate the window in Go, mirroring
+	// HasActiveUserSubscription. Cross-midnight window logic cannot be expressed
+	// portably across SQLite/MySQL/PostgreSQL in a WHERE clause.
+	if err := DB.Select("id", "daily_active_start_minutes", "daily_active_end_minutes").
 		Where("user_id = ? AND status = ? AND end_time > ? AND allow_wallet_overflow = ?",
 			userId, "active", now, false).
-		Count(&strictCount).Error; err != nil {
+		Find(&strictSubs).Error; err != nil {
 		return false, err
 	}
-	return strictCount == 0, nil
+	if len(strictSubs) == 0 {
+		return true, nil
+	}
+	m := currentMinuteOfDay()
+	for _, sub := range strictSubs {
+		if IsWithinDailyWindow(sub.DailyActiveStartMinutes, sub.DailyActiveEndMinutes, m) {
+			// At least one in-window strict subscription → block wallet fallback.
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // GetAllUserSubscriptions returns all subscriptions (active and expired) for a user.
@@ -1327,6 +1410,11 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 		return nil, errors.New("amount must be > 0")
 	}
 	now := GetDBTimestamp()
+	// Snapshot minute-of-day once before the transaction so every candidate
+	// inside the FOR UPDATE loop sees the same wall-clock value. Re-reading
+	// time per iteration can produce non-deterministic skips when the loop
+	// straddles a minute boundary (especially around cross-midnight windows).
+	minuteOfDay := currentMinuteOfDay()
 
 	returnValue := &SubscriptionPreConsumeResult{}
 
@@ -1370,6 +1458,12 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 			}
 			if err := maybeResetUserSubscriptionWithPlanTx(tx, &sub, plan, now); err != nil {
 				return err
+			}
+			// Skip candidates outside their daily active window. Same semantics
+			// as "insufficient quota" — silently move on so caller can fall back
+			// to wallet or other subscriptions.
+			if !IsWithinDailyWindow(sub.DailyActiveStartMinutes, sub.DailyActiveEndMinutes, minuteOfDay) {
+				continue
 			}
 			usedBefore := sub.AmountUsed
 			if sub.AmountTotal > 0 {

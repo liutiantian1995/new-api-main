@@ -284,6 +284,18 @@ export function UserSubscriptionsDialog(props: Props) {
                   header: t('Plan'),
                   cell: (record) => {
                     const sub = record.subscription
+                    const startMin = Number(sub.daily_active_start_minutes || 0)
+                    const endMin = Number(sub.daily_active_end_minutes || 0)
+                    // 0/0 (all-day) → no window line. Otherwise format as HH:mm.
+                    const hasWindow =
+                      !(startMin === 0 && endMin === 0) &&
+                      startMin !== endMin
+                    const fmtHm = (m: number) => {
+                      const clamped = Math.max(0, Math.min(1439, Math.trunc(m)))
+                      const h = Math.floor(clamped / 60)
+                      const mm = clamped % 60
+                      return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`
+                    }
 
                     return (
                       <div>
@@ -293,6 +305,14 @@ export function UserSubscriptionsDialog(props: Props) {
                         <div className='text-muted-foreground text-sm'>
                           {t('Source')}: {sub.source || '-'}
                         </div>
+                        {hasWindow && (
+                          <div className='text-muted-foreground text-sm'>
+                            {t('Daily {{start}}–{{end}} available', {
+                              start: fmtHm(startMin),
+                              end: fmtHm(endMin),
+                            })}
+                          </div>
+                        )}
                       </div>
                     )
                   },

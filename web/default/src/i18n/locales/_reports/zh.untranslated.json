@@ -1,7 +1,7 @@
 {
-  "estTokens exceeding max_tokens will skip this channel. 0 = unlimited.": "estTokens 超过 max_tokens 的请求将跳过此渠道。0=不限。",
   "Max Tokens": "最大 Token",
   "No tiers configured. Click \"Add Tier\" to provide a priority boost for smaller requests.": "未配置分档。点击「添加分档」为小请求提供 priority_boost。",
   "Route requests by estimated token count. Requests with estTokens exceeding max_tokens skip this channel; smaller requests receive a priority boost from configured tiers. No configuration = original routing behavior.": "按估算 token 数路由请求。estTokens 超过 max_tokens 的请求跳过此渠道；小于分档阈值的请求获得 priority_boost。不配置时维持原有路由行为。",
-  "Token Tiers (priority_boost by token threshold)": "Token 分档（按 token 阈值提升优先级）"
+  "Token Tiers (priority_boost by token threshold)": "Token 分档（按 token 阈值提升优先级）",
+  "estTokens exceeding max_tokens will skip this channel. 0 = unlimited.": "estTokens 超过 max_tokens 的请求将跳过此渠道。0=不限。"
 }

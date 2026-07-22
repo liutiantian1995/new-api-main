@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { CalendarClock, CreditCard, RefreshCw, Settings2 } from 'lucide-react'
+import { CalendarClock, Clock, CreditCard, RefreshCw, Settings2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useForm, type Resolver } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -726,6 +726,96 @@ export function SubscriptionsMutateDrawer({
                   )}
                 />
               </div>
+            </SideDrawerSection>
+
+            {/* Daily Active Window */}
+            <SideDrawerSection>
+              <h3 className='flex items-center gap-2 text-sm font-medium'>
+                <Clock className='h-4 w-4' />
+                {t('Daily Active Window')}
+              </h3>
+
+              <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
+                <FormField
+                  control={form.control}
+                  name='daily_active_start'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Daily Active Start Time')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type='time'
+                          value={field.value ?? ''}
+                          onChange={(e) =>
+                            field.onChange(e.target.value || null)
+                          }
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='daily_active_end'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Daily Active End Time')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type='time'
+                          value={field.value ?? ''}
+                          onChange={(e) =>
+                            field.onChange(e.target.value || null)
+                          }
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              {(() => {
+                const startRaw = form.watch('daily_active_start')
+                const endRaw = form.watch('daily_active_end')
+                const start = startRaw ?? null
+                const end = endRaw ?? null
+                if (start && end && start > end) {
+                  return (
+                    <FormDescription className='text-amber-600 dark:text-amber-400'>
+                      {t(
+                        'This window crosses midnight and will expire at {{end}} the next day.',
+                        { end }
+                      )}
+                    </FormDescription>
+                  )
+                }
+                return null
+              })()}
+
+              <FormDescription>
+                {t(
+                  'Leave both empty for all-day availability. Outside this window, other available subscriptions will still be consumed in expiry order.'
+                )}
+              </FormDescription>
+
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                onClick={() => {
+                  form.setValue('daily_active_start', null, {
+                    shouldDirty: true,
+                  })
+                  form.setValue('daily_active_end', null, {
+                    shouldDirty: true,
+                  })
+                }}
+              >
+                {t('Clear (All Day)')}
+              </Button>
             </SideDrawerSection>
 
             {/* Payment Config */}
