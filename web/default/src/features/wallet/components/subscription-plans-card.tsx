@@ -414,6 +414,20 @@ export function SubscriptionPlansCard({
                   const isPending = subscription?.status === 'pending'
                   const isActive =
                     subscription?.status === 'active' && !isExpired
+                  // Daily active window (minutes-of-day). 0/0 = all-day, omitted.
+                  const dailyWindowStart = Number(
+                    subscription?.daily_active_start_minutes || 0
+                  )
+                  const dailyWindowEnd = Number(
+                    subscription?.daily_active_end_minutes || 0
+                  )
+                  const hasDailyWindow =
+                    !(dailyWindowStart === 0 && dailyWindowEnd === 0) &&
+                    dailyWindowStart !== dailyWindowEnd
+                  const formatHourMinute = (m: number) => {
+                    const clamped = Math.max(0, Math.min(1439, Math.trunc(m)))
+                    return `${String(Math.floor(clamped / 60)).padStart(2, '0')}:${String(clamped % 60).padStart(2, '0')}`
+                  }
 
                   return (
                     <div
@@ -477,6 +491,14 @@ export function SubscriptionPlansCard({
                             ? t('Awaiting first API request')
                             : ''}
                       </div>
+                      {hasDailyWindow && (
+                        <div className='text-muted-foreground mt-1'>
+                          {t('Daily {{start}}–{{end}} available', {
+                            start: formatHourMinute(dailyWindowStart),
+                            end: formatHourMinute(dailyWindowEnd),
+                          })}
+                        </div>
+                      )}
                       {isActive && (subscription?.next_reset_time ?? 0) > 0 && (
                         <div className='text-muted-foreground mt-1'>
                           {t('Next reset')}:{' '}
