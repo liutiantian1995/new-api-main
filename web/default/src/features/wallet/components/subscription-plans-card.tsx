@@ -407,8 +407,11 @@ export function SubscriptionPlansCard({
                   const remainDays = getRemainingDays(sub)
                   const usagePercent = getUsagePercent(sub)
                   const now = Date.now() / 1000
-                  const isExpired = (subscription?.end_time || 0) < now
+                  const isExpired =
+                    (subscription?.end_time || 0) > 0 &&
+                    subscription!.end_time! < now
                   const isCancelled = subscription?.status === 'cancelled'
+                  const isPending = subscription?.status === 'pending'
                   const isActive =
                     subscription?.status === 'active' && !isExpired
 
@@ -436,6 +439,12 @@ export function SubscriptionPlansCard({
                               variant='neutral'
                               copyable={false}
                             />
+                          ) : isPending ? (
+                            <StatusBadge
+                              label={t('Pending')}
+                              variant='amber'
+                              copyable={false}
+                            />
                           ) : (
                             <StatusBadge
                               label={t('Expired')}
@@ -457,10 +466,16 @@ export function SubscriptionPlansCard({
                           ? t('Until')
                           : isCancelled
                             ? t('Cancelled at')
-                            : t('Expired at')}{' '}
-                        {new Date(
-                          (subscription?.end_time || 0) * 1000
-                        ).toLocaleString()}
+                            : isPending
+                              ? t('Pending activation')
+                              : t('Expired at')}
+                        {(isActive || isCancelled || (!isPending && (subscription?.end_time || 0) > 0))
+                          ? new Date(
+                              (subscription?.end_time || 0) * 1000
+                            ).toLocaleString()
+                          : isPending
+                            ? t('Awaiting first API request')
+                            : ''}
                       </div>
                       {isActive && (subscription?.next_reset_time ?? 0) > 0 && (
                         <div className='text-muted-foreground mt-1'>
