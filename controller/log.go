@@ -142,13 +142,20 @@ func GetLogsSelfStat(c *gin.Context) {
 		return
 	}
 	//tokenNum := model.SumUsedToken(logType, startTimestamp, endTimestamp, modelName, username, tokenName)
+	// 与 admin 的 GetLogsStat 保持一致：SumUsedQuota 已返回完整 Stat 结构，
+	// 这里透传 token 分解字段，供普通用户数据看板的 Input/Cache/Output Tokens 卡片使用。
 	c.JSON(200, gin.H{
 		"success": true,
 		"message": "",
 		"data": gin.H{
-			"quota": quotaNum.Quota,
-			"rpm":   quotaNum.Rpm,
-			"tpm":   quotaNum.Tpm,
+			"quota":             quotaNum.Quota,
+			"rpm":               quotaNum.Rpm,
+			"tpm":               quotaNum.Tpm,
+			"prompt_tokens":     quotaNum.PromptTokens,
+			"completion_tokens": quotaNum.CompletionTokens,
+			"cached_tokens":     quotaNum.CachedTokens,
+			"total_tokens":      quotaNum.TotalTokens,
+			"request_count":     quotaNum.RequestCount,
 			//"token": tokenNum,
 		},
 	})

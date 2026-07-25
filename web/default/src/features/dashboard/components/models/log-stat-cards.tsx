@@ -24,7 +24,6 @@ import { getUserQuotaDates } from '@/features/dashboard/api'
 import { useModelStatCardsConfig } from '@/features/dashboard/hooks/use-dashboard-config'
 import {
   buildQueryParams,
-  calculateDashboardStats,
   getDefaultDays,
 } from '@/features/dashboard/lib'
 import type {
@@ -115,25 +114,27 @@ export function LogStatCards(props: LogStatCardsProps) {
     type StatResponse = { success: boolean; data: LogStat }
     type QuotaDataResponse = { success: boolean; data: QuotaDataItem[] }
 
-    const promise: Promise<StatResponse | QuotaDataResponse> = isAdmin
-      ? api
-          .get<StatResponse>('/api/log/stat', { params })
-          .then((r) => r.data)
-      : getUserQuotaDates(params, false)
+    // admin 与非 admin 都从 /api/log/stat(self/stat) 拿标量统计：
+    // 后端 GetLogsSelfStat 已透传 prompt/completion/cached/total_tokens，
+    // 普通用户看板的 Input/Cache/Output Tokens 卡片才能拿到真实值。
+    const statEndpoint = isAdmin ? '/api/log/stat' : '/api/log/self/stat'
+    const promise: Promise<StatResponse> = api
+      .get<StatResponse>(statEndpoint, { params })
+      .then((r) => r.data)
 
-    // 管理员路径额外并行拉取图表数据（/api/log/stat 仅返回标量统计，
-    // 不携带 per-model 时序数组，模型调用分析/消耗分布图表会因此空白）
-    const chartDataPromise: Promise<QuotaDataResponse | null> = isAdmin
-      ? getUserQuotaDates(params, true)
-          .then((data) => data)
-          .catch(() => null)
-      : Promise.resolve(null)
+    // /api/log/stat 仅返回标量，需并行拉 /api/data(/self) 给图表使用
+    const chartDataPromise: Promise<QuotaDataResponse | null> = getUserQuotaDates(
+      params,
+      isAdmin
+    )
+      .then((data) => data)
+      .catch(() => null)
 
     promise
-      .then((data: StatResponse | QuotaDataResponse) => {
+      .then((data: StatResponse) => {
         if (abortController.signal.aborted) return
-        const payload = (data as QuotaDataResponse)?.data
-        if (isAdmin && !Array.isArray(payload)) {
+        const payload = data?.data
+        if (payload && !Array.isArray(payload)) {
           setStats(payload as LogStat)
           // 等待图表数据就绪后再传递，避免先用空数组覆盖再被刷新
           chartDataPromise.then((chartRes) => {
@@ -144,19 +145,6 @@ export function LogStatCards(props: LogStatCardsProps) {
               false
             )
           })
-        } else if (Array.isArray(payload)) {
-          const c = calculateDashboardStats(payload)
-          setStats({
-            quota: c.totalQuota,
-            rpm: c.totalCount,
-            tpm: c.totalTokens,
-            prompt_tokens: c.totalTokens,
-            completion_tokens: 0,
-            cached_tokens: 0,
-            total_tokens: c.totalTokens,
-            request_count: c.totalCount,
-          })
-          onDataUpdate?.(payload, false)
         }
       })
       .catch(() => {
@@ -187,9 +175,8 @@ export function LogStatCards(props: LogStatCardsProps) {
     //   - Total Count 卡片读 stat.request_count
     //   - Total Tokens 卡片读 stat.total_tokens
     //   - Average RPM/TPM 卡片读 stat.request_count / stat.total_tokens
-    // admin 路径下 stats 含真实窗口值；非 admin 路径下 LogStat 已被
-    // setStats({ request_count: c.totalCount, total_tokens: c.totalTokens, ... })
-    // 正确填充，所以直接透传即可。
+    // admin (/api/log/stat) 与非 admin (/api/log/self/stat) 路径都直接
+    // 透传后端返回的标量，setStats 已正确填充。
     request_count: stats?.request_count ?? stats?.rpm ?? 0,
     total_tokens: stats?.total_tokens ?? stats?.tpm ?? 0,
   }

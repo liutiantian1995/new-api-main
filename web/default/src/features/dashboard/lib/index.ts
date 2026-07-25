@@ -40,5 +40,5 @@ export {
   flowSankeyDatumValue,
   getFlowStages,
 } from './flow'
-export { safeDivide, calculateDashboardStats } from './stats'
+export { safeDivide } from './stats'
 export { getPreviewText } from './text'
