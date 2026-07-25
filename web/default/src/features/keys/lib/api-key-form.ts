@@ -21,7 +21,6 @@ import { z } from 'zod'
 
 import { parseQuotaFromDollars, quotaUnitsToDollars } from '@/lib/format'
 
-import { DEFAULT_GROUP } from '../constants'
 import { type ApiKeyFormData, type ApiKey } from '../types'
 
 // ============================================================================
@@ -37,7 +36,7 @@ export function getApiKeyFormSchema(t: TFunction) {
       unlimited_quota: z.boolean(),
       model_limits: z.array(z.string()),
       allow_ips: z.string().optional(),
-      group: z.string().optional(),
+      group: z.string().min(1, t('Please select a group')),
       cross_group_retry: z.boolean().optional(),
       tokenCount: z.number().min(1).optional(),
     })
@@ -72,18 +71,19 @@ export const API_KEY_FORM_DEFAULT_VALUES: ApiKeyFormValues = {
   unlimited_quota: true,
   model_limits: [],
   allow_ips: '',
-  group: DEFAULT_GROUP,
+  group: '',
   cross_group_retry: true,
   tokenCount: 1,
 }
 
 export function getApiKeyFormDefaultValues(
-  defaultUseAutoGroup: boolean
+  _defaultUseAutoGroup: boolean
 ): ApiKeyFormValues {
+  // Group selection MUST be explicit. We no longer pre-fill 'default' or
+  // 'auto' based on the system default_use_auto_group flag, so the form
+  // validation forces the user to pick a group before submitting.
   return {
     ...API_KEY_FORM_DEFAULT_VALUES,
-    group: defaultUseAutoGroup ? 'auto' : DEFAULT_GROUP,
-    cross_group_retry: defaultUseAutoGroup,
   }
 }
 
@@ -134,7 +134,10 @@ export function transformApiKeyToFormDefaults(
       ? apiKey.model_limits.split(',').filter(Boolean)
       : [],
     allow_ips: apiKey.allow_ips || '',
-    group: apiKey.group || DEFAULT_GROUP,
+    // Keep empty group as empty so form validation forces an explicit choice
+    // when editing legacy tokens that were created before group became
+    // a required field. Do NOT silently map to 'default'.
+    group: apiKey.group || '',
     cross_group_retry: !!apiKey.cross_group_retry,
     tokenCount: 1,
   }

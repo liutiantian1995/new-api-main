@@ -338,6 +338,7 @@ type BatchCreateUserRequest struct {
 	PlanId             int    `json:"plan_id"`
 	ActivationStrategy string `json:"activation_strategy"`
 	CreateToken        bool   `json:"create_token"`
+	TokenGroup         string `json:"token_group"`
 }
 
 // BatchCreateUsers creates multiple users in a single transaction.
@@ -434,6 +435,14 @@ func BatchCreateUsers(req BatchCreateUserRequest) ([]User, error) {
 				if genErr != nil {
 					return genErr
 				}
+				// Token group priority: explicit TokenGroup from caller >
+				// legacy implicit default_use_auto_group behavior. Empty
+				// TokenGroup preserves backward compatibility for callers
+				// that have not been updated yet.
+				tokenGroup := req.TokenGroup
+				if tokenGroup == "" && setting.DefaultUseAutoGroup {
+					tokenGroup = "auto"
+				}
 				token := Token{
 					UserId:         u.Id,
 					Name:           username + "的初始令牌",
@@ -443,10 +452,7 @@ func BatchCreateUsers(req BatchCreateUserRequest) ([]User, error) {
 					ExpiredTime:    -1,
 					RemainQuota:    500000,
 					UnlimitedQuota: true,
-					Group:          "",
-				}
-				if setting.DefaultUseAutoGroup {
-					token.Group = "auto"
+					Group:          tokenGroup,
 				}
 				if err := tx.Create(&token).Error; err != nil {
 					return err

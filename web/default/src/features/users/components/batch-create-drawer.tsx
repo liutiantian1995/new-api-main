@@ -60,26 +60,42 @@ import {
   sideDrawerFormClassName,
   sideDrawerHeaderClassName,
 } from '@/components/drawer-layout'
+import { GroupCombobox, type GroupOption } from '@/components/group-combobox'
 import { getAdminPlans, type PlanRecord } from '@/features/subscriptions/api'
+import { getAdminGroupDetails } from '@/lib/api'
 import { batchCreateUsers } from '../api'
 import { useUsers } from './users-provider'
 
-const batchFormSchema = z.object({
-  prefix: z
-    .string()
-    .min(1, 'Prefix is required')
-    .max(10, 'Prefix must be at most 10 characters'),
-  date_suffix: z.string().max(8).optional(),
-  count: z
-    .number()
-    .min(1, 'Count must be at least 1')
-    .max(200, 'Count must be at most 200'),
-  group: z.string().optional(),
-  role: z.number().default(1),
-  plan_id: z.number().optional(),
-  activation_strategy: z.enum(['immediate', 'on_use']).default('immediate'),
-  create_token: z.boolean().default(false),
-})
+const batchFormSchema = z
+  .object({
+    prefix: z
+      .string()
+      .min(1, 'Prefix is required')
+      .max(10, 'Prefix must be at most 10 characters'),
+    date_suffix: z.string().max(8).optional(),
+    count: z
+      .number()
+      .min(1, 'Count must be at least 1')
+      .max(200, 'Count must be at most 200'),
+    group: z.string().min(1, 'Please select a group'),
+    role: z.number().default(1),
+    plan_id: z.number().optional(),
+    activation_strategy: z.enum(['immediate', 'on_use']).default('immediate'),
+    create_token: z.boolean().default(false),
+    token_group: z.string().optional(),
+  })
+  .superRefine((data, ctx) => {
+    // API token group is required when create_token is enabled. The backend
+    // enforces the same invariant, so we surface it in the form to avoid a
+    // round-trip rejection.
+    if (data.create_token && !data.token_group) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['token_group'],
+        message: 'Please select a token group',
+      })
+    }
+  })
 
 type BatchFormValues = z.infer<typeof batchFormSchema>
 
@@ -100,6 +116,7 @@ const DEFAULT_VALUES: BatchFormValues = {
   plan_id: 0,
   activation_strategy: 'immediate',
   create_token: false,
+  token_group: '',
 }
 
 type BatchCreateDrawerProps = {
@@ -122,7 +139,36 @@ export function BatchCreateDrawer({
     enabled: open,
   })
 
+  // Fetch all system groups (admin-only). The 'auto' virtual group is
+  // filtered out because user.Group semantics do not support 'auto'.
+  const { data: groupDetailsData } = useQuery({
+    queryKey: ['admin-group-details'],
+    queryFn: getAdminGroupDetails,
+    staleTime: 5 * 60 * 1000,
+    enabled: open,
+  })
+
   const plans: PlanRecord[] = plansData?.data || []
+  // User-group dropdown filters out the 'auto' virtual group because
+  // user.Group semantics do not support 'auto'.
+  const groupOptions: GroupOption[] = (groupDetailsData?.data || [])
+    .filter((g) => g.name !== 'auto')
+    .map((g) => ({
+      value: g.name,
+      label: g.name,
+      desc: g.desc || g.name,
+      ratio: g.ratio,
+    }))
+  // Token-group dropdown KEEPS 'auto' because tokens may opt into the
+  // virtual auto group for cross-group retry behavior.
+  const tokenGroupOptions: GroupOption[] = (groupDetailsData?.data || []).map(
+    (g) => ({
+      value: g.name,
+      label: g.name,
+      desc: g.desc || g.name,
+      ratio: g.ratio,
+    })
+  )
 
   const form = useForm<BatchFormValues>({
     resolver: zodResolver(batchFormSchema),
@@ -135,6 +181,11 @@ export function BatchCreateDrawer({
     }
   }, [open, form])
 
+  // Watch create_token to conditionally render the API token group field.
+  // form.watch returns the current value reactively so the UI re-renders
+  // when the switch toggles.
+  const createToken = form.watch('create_token')
+
   const onSubmit = async (data: BatchFormValues) => {
     setIsSubmitting(true)
     try {
@@ -143,6 +194,7 @@ export function BatchCreateDrawer({
         plan_id: data.plan_id || 0,
         date_suffix: data.date_suffix || '',
         group: data.group || '',
+        token_group: data.create_token ? data.token_group || '' : '',
       }
       const result = await batchCreateUsers(payload)
       if (result.success) {
@@ -258,13 +310,17 @@ export function BatchCreateDrawer({
                   <FormItem>
                     <FormLabel>{t('Group')}</FormLabel>
                     <FormControl>
-                      <Input
-                        placeholder={t('default')}
-                        {...field}
+                      <GroupCombobox
+                        options={groupOptions}
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        placeholder={t('Select a group')}
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('Leave empty to use default group')}
+                      {t(
+                        'Select the group assigned to each created user'
+                      )}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -368,12 +424,45 @@ export function BatchCreateDrawer({
                     <FormControl>
                       <Switch
                         checked={field.value}
-                        onCheckedChange={field.onChange}
+                        onCheckedChange={(v) => {
+                          field.onChange(v)
+                          // Clear token_group when the switch turns off so
+                          // validation does not fire on a hidden field.
+                          if (!v) {
+                            form.setValue('token_group', '')
+                          }
+                        }}
                       />
                     </FormControl>
                   </FormItem>
                 )}
               />
+
+              {createToken && (
+                <FormField
+                  control={form.control}
+                  name='token_group'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('API Token Group')}</FormLabel>
+                      <FormControl>
+                        <GroupCombobox
+                          options={tokenGroupOptions}
+                          value={field.value || ''}
+                          onValueChange={field.onChange}
+                          placeholder={t('Select a token group')}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          'Select the group assigned to each created token'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
             </SideDrawerSection>
 
             <SheetFooter className={sideDrawerFooterClassName()}>

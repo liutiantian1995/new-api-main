@@ -206,6 +206,18 @@ export async function getUserGroups(): Promise<{
   return res.data
 }
 
+// Get all configured system groups with descriptions and ratios (admin only).
+// Used by admin surfaces (e.g. batch user creation) where the full system
+// group list is required regardless of any single user's usable-group set.
+export async function getAdminGroupDetails(): Promise<{
+  success: boolean
+  message?: string
+  data?: Array<{ name: string; ratio: number; desc: string }>
+}> {
+  const res = await api.get('/api/group/details')
+  return res.data
+}
+
 // ----------------------------------------------------------------------------
 // System APIs
 // ----------------------------------------------------------------------------

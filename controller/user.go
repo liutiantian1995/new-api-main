@@ -1105,6 +1105,7 @@ type BatchCreateUsersRequest struct {
 	PlanId             int    `json:"plan_id"`
 	ActivationStrategy string `json:"activation_strategy"`
 	CreateToken        bool   `json:"create_token"`
+	TokenGroup         string `json:"token_group"`
 }
 
 // BatchCreateUsers creates multiple users in a single transaction.
@@ -1126,6 +1127,10 @@ func BatchCreateUsers(c *gin.Context) {
 		common.ApiErrorMsg(c, "无效的生效策略")
 		return
 	}
+	if req.CreateToken && strings.TrimSpace(req.TokenGroup) == "" {
+		common.ApiErrorMsg(c, "创建 API 密钥时必须指定分组")
+		return
+	}
 	myRole := c.GetInt("role")
 	if req.Role >= myRole {
 		req.Role = common.RoleCommonUser
@@ -1139,6 +1144,7 @@ func BatchCreateUsers(c *gin.Context) {
 		PlanId:             req.PlanId,
 		ActivationStrategy: req.ActivationStrategy,
 		CreateToken:        req.CreateToken,
+		TokenGroup:         req.TokenGroup,
 	}
 	users, err := model.BatchCreateUsers(modelReq)
 	if err != nil {
