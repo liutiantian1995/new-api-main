@@ -2226,6 +2226,7 @@
     "Leave blank to keep the existing key": "留空以保留现有密钥",
     "Leave blank unless rotating the secret": "除非正在轮换密钥，否则留空",
     "Leave both empty for all-day availability. Outside this window, other available subscriptions will still be consumed in expiry order.": "两者都留空表示全天可用。在该时段之外，其他可用订阅仍会按到期顺序被消耗。",
+    "Inside this window, this subscription is consumed before any all-day subscriptions.": "在该时段内，本订阅会优先于全天订阅被消费。",
     "Leave empty for never expires": "留空表示永不失效",
     "Leave empty to disable the agreement requirement. Supports Markdown, HTML, or a full URL to redirect users.": "留空以禁用协议要求。支持 Markdown、HTML 或用于重定向用户的完整 URL。",
     "Leave empty to disable the privacy policy requirement. Supports Markdown, HTML, or a full URL to redirect users.": "留空以禁用隐私政策要求。支持 Markdown、HTML 或用于重定向用户的完整 URL。",

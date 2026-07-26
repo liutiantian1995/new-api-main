@@ -2226,6 +2226,7 @@
     "Leave blank to keep the existing key": "Leave blank to keep the existing key",
     "Leave blank unless rotating the secret": "Leave blank unless rotating the secret",
     "Leave both empty for all-day availability. Outside this window, other available subscriptions will still be consumed in expiry order.": "Leave both empty for all-day availability. Outside this window, other available subscriptions will still be consumed in expiry order.",
+    "Inside this window, this subscription is consumed before any all-day subscriptions.": "Inside this window, this subscription is consumed before any all-day subscriptions.",
     "Leave empty for never expires": "Leave empty for never expires",
     "Leave empty to disable the agreement requirement. Supports Markdown, HTML, or a full URL to redirect users.": "Leave empty to disable the agreement requirement. Supports Markdown, HTML, or a full URL to redirect users.",
     "Leave empty to disable the privacy policy requirement. Supports Markdown, HTML, or a full URL to redirect users.": "Leave empty to disable the privacy policy requirement. Supports Markdown, HTML, or a full URL to redirect users.",

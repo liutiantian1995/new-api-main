@@ -799,6 +799,10 @@ export function SubscriptionsMutateDrawer({
                 {t(
                   'Leave both empty for all-day availability. Outside this window, other available subscriptions will still be consumed in expiry order.'
                 )}
+                <br />
+                {t(
+                  'Inside this window, this subscription is consumed before any all-day subscriptions.'
+                )}
               </FormDescription>
 
               <Button

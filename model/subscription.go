@@ -1450,26 +1450,32 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 		if len(subs) == 0 {
 			return errors.New("no active subscription")
 		}
-		for _, candidate := range subs {
+
+		// consumeCandidate evaluates a single candidate for consumption.
+		// Returns (consumed=true, nil) when the candidate was successfully
+		// consumed, (consumed=false, nil) when the candidate should be
+		// skipped (window mismatch or insufficient quota), and (_, err)
+		// when the transaction should be rolled back.
+		consumeCandidate := func(candidate UserSubscription) (bool, error) {
 			sub := candidate
 			plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
 			if err != nil {
-				return err
+				return false, err
 			}
 			if err := maybeResetUserSubscriptionWithPlanTx(tx, &sub, plan, now); err != nil {
-				return err
+				return false, err
 			}
-			// Skip candidates outside their daily active window. Same semantics
-			// as "insufficient quota" — silently move on so caller can fall back
-			// to wallet or other subscriptions.
+			// Skip candidates outside their daily active window. Same
+			// semantics as "insufficient quota" - silently move on so
+			// caller can fall back to wallet or other subscriptions.
 			if !IsWithinDailyWindow(sub.DailyActiveStartMinutes, sub.DailyActiveEndMinutes, minuteOfDay) {
-				continue
+				return false, nil
 			}
 			usedBefore := sub.AmountUsed
 			if sub.AmountTotal > 0 {
 				remain := sub.AmountTotal - usedBefore
 				if remain < amount {
-					continue
+					return false, nil
 				}
 			}
 			record := &SubscriptionPreConsumeRecord{
@@ -1483,27 +1489,64 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 				var dup SubscriptionPreConsumeRecord
 				if err2 := tx.Where("request_id = ?", requestId).First(&dup).Error; err2 == nil {
 					if dup.Status == "refunded" {
-						return errors.New("subscription pre-consume already refunded")
+						return false, errors.New("subscription pre-consume already refunded")
 					}
 					returnValue.UserSubscriptionId = sub.Id
 					returnValue.PreConsumed = dup.PreConsumed
 					returnValue.AmountTotal = sub.AmountTotal
 					returnValue.AmountUsedBefore = sub.AmountUsed
 					returnValue.AmountUsedAfter = sub.AmountUsed
-					return nil
+					return true, nil
 				}
-				return err
+				return false, err
 			}
 			sub.AmountUsed += amount
 			if err := tx.Save(&sub).Error; err != nil {
-				return err
+				return false, err
 			}
 			returnValue.UserSubscriptionId = sub.Id
 			returnValue.PreConsumed = amount
 			returnValue.AmountTotal = sub.AmountTotal
 			returnValue.AmountUsedBefore = usedBefore
 			returnValue.AmountUsedAfter = sub.AmountUsed
-			return nil
+			return true, nil
+		}
+
+		// First pass: real-windowed subscriptions only (those with
+		// start != end). When the user holds a daily-windowed
+		// subscription active for the current minute AND an all-day
+		// subscription, the windowed one is consumed first - this
+		// matches operator intent ("configure a window = prefer this
+		// subscription during that window"). All-day subscriptions
+		// (start == end == 0 after NormalizeDefaults) are deferred to
+		// the second pass.
+		for _, candidate := range subs {
+			if candidate.DailyActiveStartMinutes == candidate.DailyActiveEndMinutes {
+				continue // all-day, defer to second pass
+			}
+			consumed, err := consumeCandidate(candidate)
+			if err != nil {
+				return err
+			}
+			if consumed {
+				return nil
+			}
+		}
+
+		// Second pass: every candidate, including all-day subscriptions
+		// and real-windowed ones whose window did not match in the first
+		// pass. This pass is behaviorally equivalent to the pre-change
+		// single-loop implementation - real-windowed candidates outside
+		// their window are still skipped by IsWithinDailyWindow inside
+		// consumeCandidate, and all-day candidates always pass.
+		for _, candidate := range subs {
+			consumed, err := consumeCandidate(candidate)
+			if err != nil {
+				return err
+			}
+			if consumed {
+				return nil
+			}
 		}
 		return fmt.Errorf("subscription quota insufficient, need=%d", amount)
 	})
