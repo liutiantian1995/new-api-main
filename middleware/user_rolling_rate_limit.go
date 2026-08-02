@@ -128,9 +128,17 @@ func rollingLimitTTL(duration int64) time.Duration {
 
 func checkRollingLimit(c *gin.Context, key string, maxCount int, duration int64) bool {
 	if !common.RedisEnabled {
-		// In-memory fallback: check current count
+		// In-memory fallback: enforce sliding-window semantics so a user
+		// recovers automatically once the oldest recorded request leaves
+		// the window, mirroring the Redis path below.
+		//
+		// Previously this branch called Count(key) < maxCount, which only
+		// looks at the raw queue length. Because rejected requests never
+		// reach recordRollingRequest, the queue was never trimmed and the
+		// user stayed over the limit until the 7-day cleanup goroutine
+		// evicted the whole key — far longer than the configured window.
 		limiter := getRollingInMemoryLimiter()
-		return limiter.Count(key) < maxCount
+		return limiter.CheckAllowed(key, maxCount, duration)
 	}
 	ctx := context.Background()
 	rdb := common.RDB

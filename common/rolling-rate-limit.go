@@ -59,6 +59,40 @@ func (l *RollingInMemoryRateLimiter) Count(key string) int {
 	return len(*queue)
 }
 
+// CheckAllowed reports whether a new request should be admitted under the
+// rolling-window quota defined by max (request count) and duration (seconds).
+//
+// Semantics mirror the Redis path in middleware/user_rolling_rate_limit.go's
+// checkRollingLimit so single-node deployments without Redis get the same
+// sliding-window recovery behavior:
+//
+//  1. queue length < max  → admit (headroom remains)
+//  2. otherwise, examine the oldest timestamp (queue head, since Record
+//     appends in chronological order):
+//     now - oldest >= duration → admit (oldest has left the window)
+//     otherwise                → reject
+//
+// Read-only: it does not trim the queue. Trimming happens lazily in Record
+// on the next successful write, exactly as the Redis path only trims in
+// recordRollingRequest. This matters because once a user hits the limit,
+// subsequent requests are rejected and Record is never called — so CheckAllowed
+// must remain accurate even when the queue contains entries that have already
+// aged out of the window.
+func (l *RollingInMemoryRateLimiter) CheckAllowed(key string, max int, duration int64) bool {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+	queue, ok := l.store[key]
+	if !ok {
+		return true
+	}
+	if len(*queue) < max {
+		return true
+	}
+	oldest := (*queue)[0]
+	now := time.Now().UnixNano()
+	return now-oldest >= duration*int64(time.Second)
+}
+
 // Record appends a new timestamp and trims the window to:
 //   - entries within the last `duration` seconds (rolling window)
 //   - at most `max` entries (cap for memory bound)

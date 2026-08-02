@@ -106,3 +106,46 @@ func TestRecordRollingRequest_InMemory(t *testing.T) {
 	}
 	require.Equal(t, 5, limiter.Count(key), "should trim to max=5")
 }
+
+// TestCheckRollingLimit_InMemory_WindowRecovery verifies the in-memory branch
+// of checkRollingLimit recovers after the rolling window passes. This is the
+// regression guard for the bug where users were locked out far longer than
+// the configured window because Count-based checking ignored the timestamps
+// and the queue only shrank on Record (which is never called for rejected
+// requests). The fix routes the in-memory path through CheckAllowed.
+//
+// The Redis branch already had the correct sliding-window semantics; we only
+// need to cover the in-memory path here.
+func TestCheckRollingLimit_InMemory_WindowRecovery(t *testing.T) {
+	origRedis := common.RedisEnabled
+	origLimiter := rollingInMemoryLimiter
+	defer func() {
+		common.RedisEnabled = origRedis
+		rollingInMemoryLimiter = origLimiter
+		rollingInMemoryLimiterOnce = sync.Once{}
+	}()
+
+	common.RedisEnabled = false
+	rollingInMemoryLimiter = nil
+	rollingInMemoryLimiterOnce = sync.Once{}
+
+	key := "test:checklimit:recovery"
+	var duration int64 = 1 // 1 second; smallest valid window
+
+	// Fill to max=3 with successful records.
+	recordRollingRequest(key, 3, duration)
+	recordRollingRequest(key, 3, duration)
+	recordRollingRequest(key, 3, duration)
+
+	// Inside window → reject. checkRollingLimit's in-memory branch does not
+	// touch the gin.Context, so nil is safe here.
+	require.False(t, checkRollingLimit(nil, key, 3, duration), "should reject at max within window")
+
+	// Wait past the rolling window. No Record happens in between, mimicking
+	// a user whose requests keep getting rejected.
+	time.Sleep(1100 * time.Millisecond)
+
+	// After the window passes → allow. Before the fix this stayed false
+	// until the 7-day cleanup goroutine deleted the key.
+	require.True(t, checkRollingLimit(nil, key, 3, duration), "should allow after window expired")
+}
