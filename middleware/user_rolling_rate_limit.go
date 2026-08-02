@@ -62,7 +62,15 @@ func UserRollingRateLimit() gin.HandlerFunc {
 		userOverride := common.GetContextKeyString(c, constant.ContextKeyUserRollingRateLimit)
 		limits := resolveRollingLimits(userOverride, userGroup)
 
+		// [RRL-DIAG] temporary instrumentation — remove after debugging
+		common.SysLog(fmt.Sprintf("[RRL-DIAG] enter userId=%d group=%q override_len=%d tiers=%d redis_enabled=%v",
+			userId, userGroup, len(userOverride), len(limits), common.RedisEnabled))
+		for i, t := range limits {
+			common.SysLog(fmt.Sprintf("[RRL-DIAG]   tier[%d] duration=%ds limit=%d", i, t.Duration, t.Limit))
+		}
+
 		if len(limits) == 0 {
+			common.SysLog(fmt.Sprintf("[RRL-DIAG] userId=%d no tier matched → skip", userId))
 			c.Next()
 			return
 		}
@@ -71,7 +79,9 @@ func UserRollingRateLimit() gin.HandlerFunc {
 		for i := range limits {
 			tier := &limits[i]
 			key := fmt.Sprintf("rolling_limit:%d:%d", userId, tier.Duration)
-			if !checkRollingLimit(c, key, tier.Limit, tier.Duration) {
+			allowed := checkRollingLimit(c, key, tier.Limit, tier.Duration)
+			common.SysLog(fmt.Sprintf("[RRL-DIAG] check userId=%d key=%s allowed=%v", userId, key, allowed))
+			if !allowed {
 				msg := fmt.Sprintf("已达到 %s 内最大请求数 %d，请稍后重试",
 					common.FormatRollingDuration(tier.Duration), tier.Limit)
 				abortWithOpenAiMessage(c, http.StatusTooManyRequests, msg)
@@ -82,12 +92,16 @@ func UserRollingRateLimit() gin.HandlerFunc {
 		c.Next()
 
 		// Record only on success
-		if c.Writer.Status() < 400 {
+		status := c.Writer.Status()
+		if status < 400 {
 			for i := range limits {
 				tier := &limits[i]
 				key := fmt.Sprintf("rolling_limit:%d:%d", userId, tier.Duration)
 				recordRollingRequest(key, tier.Limit, tier.Duration)
 			}
+			common.SysLog(fmt.Sprintf("[RRL-DIAG] record userId=%d status=%d → all tiers recorded", userId, status))
+		} else {
+			common.SysLog(fmt.Sprintf("[RRL-DIAG] skip-record userId=%d status=%d (>=400, upstream failed)", userId, status))
 		}
 	}
 }
@@ -138,7 +152,11 @@ func checkRollingLimit(c *gin.Context, key string, maxCount int, duration int64)
 		// user stayed over the limit until the 7-day cleanup goroutine
 		// evicted the whole key — far longer than the configured window.
 		limiter := getRollingInMemoryLimiter()
-		return limiter.CheckAllowed(key, maxCount, duration)
+		allowed := limiter.CheckAllowed(key, maxCount, duration)
+		// [RRL-DIAG] temporary instrumentation — remove after debugging
+		common.SysLog(fmt.Sprintf("[RRL-DIAG]   in-memory key=%s count=%d max=%d duration=%ds allowed=%v",
+			key, limiter.Count(key), maxCount, duration, allowed))
+		return allowed
 	}
 	ctx := context.Background()
 	rdb := common.RDB
