@@ -383,6 +383,52 @@ func (c *ClaudeRequest) SearchToolNameByToolCallId(toolCallId string) string {
 	return ""
 }
 
+// StripServerToolBlocks 移除 messages 中所有 type == "server_tool_use" 或
+// "server_tool_result" 的 content 块，并丢弃过滤后 content 为空的消息。
+//
+// server_tool_use / server_tool_result 是 Anthropic 服务端工具（如 web_search、
+// computer_use、bash）的私有 content 块，仅由 Claude 自身生成。非 Anthropic 原生
+// 上游（如 GLM、Qwen、Vertex 等 Claude 兼容反代）无法识别这些类型，透传会触发
+// 类似 "invalid value: server_tool_use" 的 400 错误。
+//
+// 返回被移除的 content 块数量，便于日志观察。
+func (c *ClaudeRequest) StripServerToolBlocks() int {
+	if c == nil {
+		return 0
+	}
+	removed := 0
+	kept := make([]ClaudeMessage, 0, len(c.Messages))
+	for _, msg := range c.Messages {
+		if msg.IsStringContent() {
+			kept = append(kept, msg)
+			continue
+		}
+		content, err := msg.ParseContent()
+		if err != nil {
+			kept = append(kept, msg)
+			continue
+		}
+		filtered := make([]ClaudeMediaMessage, 0, len(content))
+		for _, m := range content {
+			if m.Type == "server_tool_use" || m.Type == "server_tool_result" {
+				removed++
+				continue
+			}
+			filtered = append(filtered, m)
+		}
+		if len(filtered) == 0 {
+			// 整条消息都是 server_tool 相关块，丢弃以避免发空 content 给上游
+			continue
+		}
+		if len(filtered) < len(content) {
+			msg.SetContent(filtered)
+		}
+		kept = append(kept, msg)
+	}
+	c.Messages = kept
+	return removed
+}
+
 // AddTool 添加工具到请求中
 func (c *ClaudeRequest) AddTool(tool any) {
 	if c.Tools == nil {

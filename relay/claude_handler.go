@@ -36,6 +36,14 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return types.NewError(fmt.Errorf("failed to copy request to ClaudeRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 
+	// 移除 Anthropic 服务端工具（web_search / computer_use 等）的私有 content 块。
+	// 这些块（server_tool_use / server_tool_result）只由 Claude 自身生成并保留在
+	// 历史消息中，非 Anthropic 原生上游无法识别，透传会触发 400。
+	// 注意：PassThrough 路径绕过本处理，使用原始请求体，不会过滤。
+	if removed := request.StripServerToolBlocks(); removed > 0 {
+		logger.LogDebug(c, "stripped %d server_tool_use/server_tool_result content blocks from claude request", removed)
+	}
+
 	err = helper.ModelMappedHelper(c, info, request)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
